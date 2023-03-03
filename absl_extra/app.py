@@ -1,5 +1,6 @@
+import json
 from typing import List, Optional, Callable
-from absl import app
+from absl import app, logging, flags
 from ml_collections import config_flags, ConfigDict
 
 
@@ -33,6 +34,17 @@ class App:
             self.notifier.notify_job_started(argv[0])
             ex_handler = ExceptionHandlerImpl(argv[0], self.notifier)
             app.install_exception_handler(ex_handler)
+            logging.info("-" * 50)
+            logging.info(
+                f"Flags: {json.dumps(flags.FLAGS.flag_values_dict(), sort_keys=True, indent=4)}"
+            )
+            logging.info("-" * 50)
+            if self.config is not None:
+                logging.info(
+                    f"Config: {json.dumps(self.config.value, sort_keys=True, indent=4)}"
+                )
+                logging.info("-" * 50)
+
             main(argv, map_optional(self.config, lambda v: v.value))
             self.notifier.notify_job_finished(argv[0])
 
