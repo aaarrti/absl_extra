@@ -1,12 +1,11 @@
 import json
-from typing import List, Optional, Callable
-from absl import app, logging, flags
-from ml_collections import config_flags, ConfigDict
+from typing import Callable, List, Optional
 
+from absl import app, flags, logging
+from ml_collections import ConfigDict, config_flags
 
 from .notifiers import Notifier
-from .utils import value_or_default, map_optional
-
+from .utils import map_optional, value_or_default
 
 MainFn = Callable[[List[str], Optional[ConfigDict]], None]
 
@@ -22,8 +21,13 @@ class ExceptionHandlerImpl(app.ExceptionHandler):
 
 class App:
     def __init__(
-        self, notifier: Optional[Notifier] = None, *, config_file: Optional[str] = None
+        self,
+        *,
+        name: Optional[str] = None,
+        notifier: Optional[Notifier] = None,
+        config_file: Optional[str] = None,
     ):
+        self.name = name
         self.notifier = value_or_default(notifier, lambda: Notifier())
         self.config = map_optional(
             config_file, lambda v: config_flags.DEFINE_config_file("config", default=v)
@@ -31,8 +35,9 @@ class App:
 
     def run(self, main: MainFn):
         def hook_main(argv):
-            self.notifier.notify_job_started(argv[0])
-            ex_handler = ExceptionHandlerImpl(argv[0], self.notifier)
+            app_name = value_or_default(self.name, argv[0])
+            self.notifier.notify_job_started(app_name)
+            ex_handler = ExceptionHandlerImpl(app_name, self.notifier)
             app.install_exception_handler(ex_handler)
             logging.info("-" * 50)
             logging.info(
@@ -46,6 +51,6 @@ class App:
                 logging.info("-" * 50)
 
             main(argv, map_optional(self.config, lambda v: v.value))
-            self.notifier.notify_job_finished(argv[0])
+            self.notifier.notify_job_finished(app_name)
 
         app.run(hook_main)

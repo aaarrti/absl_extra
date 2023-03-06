@@ -1,8 +1,10 @@
 from __future__ import annotations
-from typing import Optional
+
 import os
-from absl import logging
+from typing import Optional
+
 import slack_sdk
+from absl import logging
 
 
 class Notifier:
