@@ -126,7 +126,7 @@ class App:
         config_file: Optional[str] = None,
         env_file: Optional[str] = None,
     ):
-        self.name = value_or_default(name, lambda: "app")
+        self.name = name
         self.notifier = value_or_default(notifier, lambda: Notifier())
         self.config = map_optional(
             config_file, lambda v: config_flags.DEFINE_config_file("config", default=v)
