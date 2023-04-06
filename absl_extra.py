@@ -137,7 +137,7 @@ class App:
     def run(self, main: MainFn):
         @wraps(main)
         def hook_main(argv):
-            app_name = value_or_default(self.name, argv[0])
+            app_name = value_or_default(self.name, lambda: argv[0])
             self.notifier.notify_job_started(app_name)
             ex_handler = ExceptionHandlerImpl(app_name, self.notifier)
             app.install_exception_handler(ex_handler)
