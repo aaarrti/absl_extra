@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 import slack_sdk
@@ -22,17 +21,19 @@ class SlackNotifier(Notifier):
     def __init__(
         self, slack_token: Optional[str] = None, channel_id: Optional[str] = None
     ):
+        from os import environ
+
         if slack_token is None:
-            if "SLACK_BOT_TOKEN" not in os.environ:
+            if "SLACK_BOT_TOKEN" not in environ:
                 raise ValueError("Provide slack token.")
             else:
-                slack_token = os.environ["SLACK_BOT_TOKEN"]
+                slack_token = environ["SLACK_BOT_TOKEN"]
 
         if channel_id is None:
-            if "CHANNEL_ID" not in os.environ:
+            if "CHANNEL_ID" not in environ:
                 raise ValueError("Provide channel id.")
             else:
-                channel_id = os.environ["CHANNEL_ID"]
+                channel_id = environ["CHANNEL_ID"]
 
         self.slack_token = slack_token
         self.channel_id = channel_id
