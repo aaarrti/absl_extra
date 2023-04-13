@@ -75,7 +75,7 @@ classifiers = [  # Optional
   #   3 - Alpha
   #   4 - Beta
   #   5 - Production/Stable
-  #"Development Status :: 3 - Alpha",
+  "Development Status :: 3 - Alpha",
 
   # Indicate who your project is intended for
   #"Intended Audience :: Developers",
@@ -103,10 +103,7 @@ classifiers = [  # Optional
 # For an analysis of this field vs pip's requirements files see:
 # https://packaging.python.org/discussions/install-requires-vs-requirements/
 dependencies = [
-  "absl_py",
-  "ml_collections",
-  "slack_sdk",
-  "python_dotenv"
+  "absl_py"
 ]
 
 # List additional groups of dependencies here (e.g. development
@@ -119,7 +116,9 @@ dependencies = [
 # projects.
 [project.optional-dependencies] # Optional
 dev = ["black", "mypy"]
-# test = ["coverage"]
+mongo = ["pymongo"]
+ml_collections = ["ml_collections"]
+slack = ["slack_sdk"]
 
 # List URLs that are relevant to your project
 #
@@ -132,7 +131,7 @@ dev = ["black", "mypy"]
 # maintainers, and where to support the project financially. The key is
 # what's used to render the link text on PyPI.
 [project.urls]  # Optional
-"Homepage" = "http://github.com/aaarrti/absl_extra"
+"Homepage" = "https://github.com/aaarrti/absl_extra"
 #"Bug Reports" = "https://github.com/pypa/sampleproject/issues"
 #"Funding" = "https://donate.pypi.org"
 #"Say Thanks!" = "http://saythanks.io/to/example"
@@ -151,7 +150,5 @@ dev = ["black", "mypy"]
 #package-data = {"sample" = ["*.dat"]}
 
 [build-system]
-# These are the assumed default build requirements from pip:
-# https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
-requires = ["setuptools>=43.0.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["flit-core >= 3.4"]
+build-backend = "flit_core.buildapi"
