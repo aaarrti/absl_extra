@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from importlib import util
 from typing import Callable, NamedTuple
+from functools import partial
 
 
 from absl import app, flags, logging
@@ -147,5 +148,5 @@ class App:
         logging.info("-" * 50)
 
         self.notifier.notify_job_started(app_name)
-        app.run(main)
+        app.run(partial(main, **kwargs))
         self.notifier.notify_job_finished(app_name)
