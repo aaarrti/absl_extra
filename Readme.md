@@ -23,18 +23,15 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer("some_flag", default=4, help=None)
 
 @functools.partial(
-  hook_main,
-  app_name="some_name",
-  config_file="config.py",
-  mongo_config=MongoConfig(
-    uri=os.environ["MONGO_URI"], 
-    db_name="my_project", 
-    collection="experiment_1"
-  ),
-  notifier=SlackNotifier(
-    slack_token=os.environ["SLACK_TOKEN"], 
-    channel_id=os.environ["CHANNEL_ID"]
-  )
+    hook_main,
+    app_name="some_name",
+    config_file="config.py",
+    mongo_config=MongoConfig(
+        uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
+    ),
+    notifier=SlackNotifier(
+        slack_token=os.environ["SLACK_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
+    ),
 )
 def main(cmd: str, config: ConfigDict, db: Collection) -> None:
     pass
