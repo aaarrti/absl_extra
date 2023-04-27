@@ -6,28 +6,39 @@ It will:
   - By default, Notifier will just log those out to `stdout`.
   - I prefer receiving those in Slack, though (see example below).
 - Log parsed CLI flags from `absl.flags.FLAGS` and config values from `config_file:get_config()`
-- Inject `ml_collections.ConfigDict` from `config_file`, if kwargs provided.
-- Inject `pymongo.collection.Collection` if `mongo_config` kwargs provided.
+- Inject `ml_collections.ConfigDict` from `config_file`, if kwarg provided.
+- Inject `pymongo.collection.Collection` if `mongo_config` kwarg provided.
 
 Minimal example
 ```python
-from os import environ
+import os
+import functools
 from pymongo.collection import Collection
-from absl import flags
+from absl import flags, app
 from ml_collections import ConfigDict
-from absl_extra import App, SlackNotifier, MongoConfig
+from absl_extra import hook_main, SlackNotifier, MongoConfig
 
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("some_flag", default=4, help=None)
 
-def main(cmd: str, config: ConfigDict, db: Collection) -> None: ...
+@functools.partial(
+  hook_main,
+  app_name="some_name",
+  config_file="config.py",
+  mongo_config=MongoConfig(
+    uri=os.environ["MONGO_URI"], 
+    db_name="my_project", 
+    collection="experiment_1"
+  ),
+  notifier=SlackNotifier(
+    slack_token=os.environ["SLACK_TOKEN"], 
+    channel_id=os.environ["CHANNEL_ID"]
+  )
+)
+def main(cmd: str, config: ConfigDict, db: Collection) -> None:
+    pass
 
 if __name__ == "__main__":
-    app = App(
-        notifier=SlackNotifier(slack_token=environ["SLACK_TOKEN"], channel_id=environ["CHANNEL_ID"]),
-        config_file="config.py",
-        mongo_config=MongoConfig(uri=environ["MONGO_URI"], db_name="my_project", collection="experiment_1"),
-   )
     app.run(main)
 ```

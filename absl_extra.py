@@ -3,24 +3,26 @@ from __future__ import annotations
 import json
 from importlib import util
 from typing import Callable, NamedTuple
-from functools import partial
-
-
+from functools import partial, wraps
 from absl import app, flags, logging
 
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
+else:
+    logging.warning("pymongo not installed.")
 
 
 if util.find_spec("ml_collections"):
     from ml_collections import config_flags
+else:
+    logging.warning("ml_collections not installed")
 
 
 class MongoConfig(NamedTuple):
     uri: str
     db_name: str
-    collection: str
+    collection: str | None = None
 
 
 class Notifier:
@@ -91,6 +93,9 @@ if util.find_spec("slack_sdk"):
             )
             raise ex
 
+else:
+    logging.warning("slack_sdk not installed.")
+
 
 class ExceptionHandlerImpl(app.ExceptionHandler):
     def __init__(self, cmd: str, notifier: Notifier):
@@ -101,45 +106,44 @@ class ExceptionHandlerImpl(app.ExceptionHandler):
         self.notifier.notify_job_failed(self.cmd, exc)
 
 
-class App:
-    def __init__(
-        self,
-        *,
-        app_name: str | None = None,
-        notifier: Notifier | None = None,
-        config_file: str | None = None,
-        mongo_config: MongoConfig | None = None,
-    ):
-        if app_name is not None:
-            self.app_name = app_name
-        if notifier is None:
-            notifier = Notifier()
-        self.notifier = notifier
-        if config_file is not None:
-            self.config = config_flags.DEFINE_config_file("config")
-        if mongo_config is not None:
-            self.db = (
-                MongoClient(mongo_config.uri)
-                .get_database(mongo_config.db_name)
-                .get_collection(mongo_config.collection)
-            )
+def hook_main(
+    main: Callable,
+    app_name: str | None = None,
+    notifier: Notifier | None = None,
+    config_file: str | None = None,
+    mongo_config: MongoConfig | None = None,
+):
+    if notifier is None:
+        notifier = Notifier()
+    if util.find_spec("ml_collections") and config_file is not None:
+        config = config_flags.DEFINE_config_file("config")
+    else:
+        config = None
+    if util.find_spec("pymongo") and mongo_config is not None:
+        db = MongoClient(mongo_config.uri).get_database(mongo_config.db_name)
+        if mongo_config.collection is not None:
+            db = db.get_collection(mongo_config.collection)
+    else:
+        db = None
 
-    def run(self, main: Callable):
-        if hasattr(self, "app_name"):
-            app_name = self.app_name
+    @wraps(main)
+    def wrapper(cmd: str):
+        if app_name is None:
+            _app_name = cmd
         else:
-            app_name = "app"
-        ex_handler = ExceptionHandlerImpl(app_name, self.notifier)
-        app.install_exception_handler(ex_handler)
+            _app_name = app_name
+
+        app.install_exception_handler(ExceptionHandlerImpl(cmd, notifier))
+
         kwargs = {}
-        if hasattr(self, "config"):
+        if config is not None:
             logging.info(
-                f"Config: {json.dumps(self.config.value, sort_keys=True, indent=4)}"
+                f"Config: {json.dumps(config.value, sort_keys=True, indent=4)}"
             )
             logging.info("-" * 50)
-            kwargs["config"] = self.config.value
-        if hasattr(self, "db"):
-            kwargs["db"] = self.db
+            kwargs["config"] = config.value
+        if db is not None:
+            kwargs["db"] = db
 
         logging.info("-" * 50)
         logging.info(
@@ -147,6 +151,8 @@ class App:
         )
         logging.info("-" * 50)
 
-        self.notifier.notify_job_started(app_name)
+        notifier.notify_job_started(app_name)
         app.run(partial(main, **kwargs))
-        self.notifier.notify_job_finished(app_name)
+        notifier.notify_job_finished(app_name)
+
+    return wrapper
