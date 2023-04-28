@@ -5,6 +5,7 @@ from importlib import util
 from typing import Callable, NamedTuple
 from functools import partial, wraps
 from absl import app, flags, logging
+import inspect
 
 
 if util.find_spec("pymongo"):
@@ -154,5 +155,28 @@ def hook_main(
         notifier.notify_job_started(app_name)
         app.run(partial(main, **kwargs))
         notifier.notify_job_finished(app_name)
+
+    return wrapper
+
+
+def log_before(func, logger=logging.debug):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        func_args = inspect.signature(func).bind(*args, **kwargs).arguments
+        func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
+        logger(
+            f"Entered {func.__module__}.{func.__qualname__} with args ( {func_args_str} )"
+        )
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def log_after(func, logger=logging.debug):
+    @wraps(func)
+    def wrapper(*func_args, **func_kwargs):
+        retval = func(*func_args, **func_kwargs)
+        logger("Exited " + func.__name__ + "() with value: " + repr(retval))
+        return retval
 
     return wrapper

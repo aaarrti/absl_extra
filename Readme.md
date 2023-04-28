@@ -33,8 +33,7 @@ flags.DEFINE_integer("some_flag", default=4, help=None)
         slack_token=os.environ["SLACK_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
     ),
 )
-def main(cmd: str, config: ConfigDict, db: Collection) -> None:
-    pass
+def main(cmd: str, config: ConfigDict, db: Collection) -> None: ...
 
 if __name__ == "__main__":
     app.run(main)
