@@ -105,6 +105,7 @@ class ExceptionHandlerImpl(app.ExceptionHandler):
 
     def handle(self, exc: Exception):
         self.notifier.notify_job_failed(self.cmd, exc)
+        raise exc
 
 
 def hook_main(
