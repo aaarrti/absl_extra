@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from importlib import util
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, TypeVar
 from functools import partial, wraps
 from absl import app, flags, logging
 import inspect
+
+T = TypeVar("T", bound=Callable, covariant=True)
 
 
 if util.find_spec("pymongo"):
@@ -45,7 +47,7 @@ if util.find_spec("slack_sdk"):
             self.slack_token = slack_token
             self.channel_id = channel_id
 
-        def notify_job_started(self, cmd: str):
+        def notify_job_started(self, name: str):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
@@ -54,14 +56,14 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f" :ballot_box_with_check: Job {cmd} started.",
+                            "text": f" :ballot_box_with_check: Job {name} started.",
                         },
                     }
                 ],
                 text="Job Started!",
             )
 
-        def notify_job_finished(self, cmd: str):
+        def notify_job_finished(self, name: str):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
@@ -70,14 +72,14 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":white_check_mark: Job {cmd} finished execution.",
+                            "text": f":white_check_mark: Job {name} finished execution.",
                         },
                     }
                 ],
                 text="Job Finished!",
             )
 
-        def notify_job_failed(self, cmd: str, ex: Exception):
+        def notify_job_failed(self, name: str, exception: Exception):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
@@ -86,35 +88,34 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":x: Job {cmd} failed, reason:\n ```{ex}```",
+                            "text": f":x: Job {name} failed, reason:\n ```{exception}```",
                         },
                     }
                 ],
                 text="Job Finished!",
             )
-            raise ex
 
 else:
     logging.warning("slack_sdk not installed.")
 
 
 class ExceptionHandlerImpl(app.ExceptionHandler):
-    def __init__(self, cmd: str, notifier: Notifier):
-        self.cmd = cmd
+    def __init__(self, name: str, notifier: Notifier):
+        self.cmd = name
         self.notifier = notifier
 
-    def handle(self, exc: Exception):
-        self.notifier.notify_job_failed(self.cmd, exc)
-        raise exc
+    def handle(self, exception: Exception):
+        self.notifier.notify_job_failed(self.cmd, exception)
 
 
 def hook_main(
     main: Callable,
+    *,
     app_name: str | None = None,
     notifier: Notifier | None = None,
     config_file: str | None = None,
     mongo_config: MongoConfig | None = None,
-):
+) -> Callable:
     if notifier is None:
         notifier = Notifier()
     if util.find_spec("ml_collections") and config_file is not None:
@@ -160,7 +161,7 @@ def hook_main(
     return wrapper
 
 
-def log_before(func, logger=logging.debug):
+def log_before(func: T, logger=logging.debug) -> T:
     @wraps(func)
     def wrapper(*args, **kwargs):
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
@@ -173,10 +174,10 @@ def log_before(func, logger=logging.debug):
     return wrapper
 
 
-def log_after(func, logger=logging.debug):
+def log_after(func: T, logger=logging.debug) -> T:
     @wraps(func)
-    def wrapper(*func_args, **func_kwargs):
-        retval = func(*func_args, **func_kwargs)
+    def wrapper(*args, **kwargs):
+        retval = func(*args, **kwargs)
         logger("Exited " + func.__name__ + "() with value: " + repr(retval))
         return retval
 

@@ -8,6 +8,7 @@ It will:
 - Log parsed CLI flags from `absl.flags.FLAGS` and config values from `config_file:get_config()`
 - Inject `ml_collections.ConfigDict` from `config_file`, if kwarg provided.
 - Inject `pymongo.collection.Collection` if `mongo_config` kwarg provided.
+- `log_after` and `log_before` decorators, which proved extremely usefully for print-debugging.
 
 Minimal example
 ```python
@@ -33,7 +34,9 @@ flags.DEFINE_integer("some_flag", default=4, help=None)
         slack_token=os.environ["SLACK_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
     ),
 )
-def main(cmd: str, config: ConfigDict, db: Collection) -> None: ...
+def main(cmd: str, config: ConfigDict, db: Collection) -> None:
+    # Do all the heavy lifting. 
+    pass
 
 if __name__ == "__main__":
     app.run(main)
