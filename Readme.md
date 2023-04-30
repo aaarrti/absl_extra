@@ -31,7 +31,7 @@ flags.DEFINE_integer("some_flag", default=4, help=None)
         uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
     ),
     notifier=SlackNotifier(
-        slack_token=os.environ["SLACK_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
+        slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
     ),
 )
 def main(cmd: str, config: ConfigDict, db: Collection) -> None:
