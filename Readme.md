@@ -11,33 +11,28 @@ It will:
 - `log_after` and `log_before` decorators, which proved extremely usefully for print-debugging.
 
 Minimal example
+
 ```python
 import os
-import functools
 from pymongo.collection import Collection
-from absl import flags, app
 from ml_collections import ConfigDict
-from absl_extra import hook_main, SlackNotifier, MongoConfig
+from absl import logging
+from absl_extra import register_task, SlackBaseNotifier, MongoConfig, run
 
 
-FLAGS = flags.FLAGS
-flags.DEFINE_integer("some_flag", default=4, help=None)
+@register_task
+def main(config: ConfigDict, db: Collection) -> None:
+    logging.info("Doing some heavy lifting...")
 
-@functools.partial(
-    hook_main,
-    app_name="some_name",
-    config_file="config.py",
-    mongo_config=MongoConfig(
-        uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
-    ),
-    notifier=SlackNotifier(
-        slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
-    ),
-)
-def main(cmd: str, config: ConfigDict, db: Collection) -> None:
-    # Do all the heavy lifting. 
-    pass
 
 if __name__ == "__main__":
-    app.run(main)
+    run(
+        config_file="config.py",
+        mongo_config=MongoConfig(
+            uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
+        ),
+        notifier=SlackBaseNotifier(
+            slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
+        ),
+    )
 ```

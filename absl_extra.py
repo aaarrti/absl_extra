@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-import functools
+import inspect
 import json
+from functools import wraps, partial
 from importlib import util
 from typing import Callable, NamedTuple, TypeVar, Mapping
-from functools import wraps
+
 from absl import app, flags, logging
-import inspect
 
 T = TypeVar("T", bound=Callable, covariant=True)
+FLAGS = flags.FLAGS
 
+flags.DEFINE_string("task", default="main", help="Name of task to run.")
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
 else:
     logging.warning("pymongo not installed.")
-
 
 if util.find_spec("ml_collections"):
     from ml_collections import config_flags
@@ -29,7 +30,7 @@ class MongoConfig(NamedTuple):
     collection: str | None = None
 
 
-class Notifier:
+class BaseNotifier:
     def notify_job_started(self, name: str):
         logging.info(f"Job {name} started.")
 
@@ -43,7 +44,7 @@ class Notifier:
 if util.find_spec("slack_sdk"):
     import slack_sdk
 
-    class SlackNotifier(Notifier):
+    class SlackBaseNotifier(BaseNotifier):
         def __init__(self, slack_token: str, channel_id: str):
             self.slack_token = slack_token
             self.channel_id = channel_id
@@ -101,63 +102,12 @@ else:
 
 
 class ExceptionHandlerImpl(app.ExceptionHandler):
-    def __init__(self, name: str, notifier: Notifier):
+    def __init__(self, name: str, notifier: BaseNotifier):
         self.name = name
         self.notifier = notifier
 
     def handle(self, exception: Exception):
         self.notifier.notify_job_failed(self.name, exception)
-
-
-def hook_main(
-    main: Callable,
-    *,
-    app_name: str = "absl_app",
-    notifier: Notifier | None = None,
-    config_file: str | None = None,
-    mongo_config: MongoConfig | Mapping[str, ...] | None = None,
-) -> Callable:
-    main_kwargs = {}
-
-    if notifier is None:
-        notifier = Notifier()
-    if util.find_spec("ml_collections") and config_file is not None:
-        config = config_flags.DEFINE_config_file("config")
-        main_kwargs["config"] = config.value
-    else:
-        config = None
-
-    if util.find_spec("pymongo") and mongo_config is not None:
-        if isinstance(mongo_config, Mapping):
-            mongo_config = MongoConfig(**mongo_config)
-        db = MongoClient(mongo_config.uri).get_database(mongo_config.db_name)
-        if mongo_config.collection is not None:
-            db = db.get_collection(mongo_config.collection)
-        main_kwargs["db"] = db
-
-    def init_callback():
-        logging.info("-" * 50)
-        logging.info(
-            f"Flags: {json.dumps(flags.FLAGS.flag_values_dict(), sort_keys=True, indent=4)}"
-        )
-        if config is not None:
-            logging.info(
-                f"Config: {json.dumps(config.value, sort_keys=True, indent=4)}"
-            )
-        logging.info("-" * 50)
-
-        notifier.notify_job_started(app_name)
-
-    app.install_exception_handler(ExceptionHandlerImpl(app_name, notifier))
-    app.call_after_init(init_callback)
-
-    @wraps(main)
-    def wrapper(*args, **kwargs):
-        ret_val = main(*args, **kwargs)
-        notifier.notify_job_finished(app_name)
-        return ret_val
-
-    return functools.partial(wrapper, **main_kwargs)
 
 
 def log_before(func: T, logger=logging.debug) -> T:
@@ -181,3 +131,78 @@ def log_after(func: T, logger=logging.debug) -> T:
         return retval
 
     return wrapper
+
+
+TASKS = {}
+
+
+def register_task(fn: Callable, name: str | Callable[[], str] = "main"):
+    if isinstance(name, Callable):
+        name = name()
+    if name in TASKS:
+        raise RuntimeError(f"Can't register 2 tasks with same name: {name}")
+    TASKS[name] = fn
+
+
+def hook_task(
+    task: Callable, task_name: str, notifier: BaseNotifier, config_file: str | None
+) -> Callable:
+    @wraps(task)
+    def wrapper(*, db=None):
+        logging.info("-" * 50)
+        logging.info(
+            f"Flags: {json.dumps(flags.FLAGS.flag_values_dict(), sort_keys=True, indent=4)}"
+        )
+        if util.find_spec("ml_collections") and config_file is not None:
+            config = config_flags.DEFINE_config_file(config_file)
+        else:
+            config = None
+
+        if config is not None:
+            logging.info(
+                f"Config: {json.dumps(config.value, sort_keys=True, indent=4)}"
+            )
+        logging.info("-" * 50)
+        notifier.notify_job_started(task_name)
+
+        kwargs = {}
+        if db is not None:
+            kwargs["db"] = db
+        if config is not None:
+            kwargs["config"] = config
+
+        ret_val = task(**kwargs)
+        notifier.notify_job_finished(task_name)
+        return ret_val
+
+    return wrapper
+
+
+def pseudo_main(cmd, **kwargs):
+    TASKS[FLAGS.task](**kwargs)
+
+
+def run(
+    app_name: str | Callable[[], str] = "app",
+    notifier: BaseNotifier | None = None,
+    config_file: str | None = None,
+    mongo_config: MongoConfig | Mapping[str, ...] | None = None,
+):
+    if notifier is None:
+        notifier = BaseNotifier()
+
+    if util.find_spec("pymongo") and mongo_config is not None:
+        if isinstance(mongo_config, Mapping):
+            mongo_config = MongoConfig(**mongo_config)
+        db = MongoClient(mongo_config.uri).get_database(mongo_config.db_name)
+        if mongo_config.collection is not None:
+            db = db.get_collection(mongo_config.collection)
+    else:
+        db = None
+
+    app.install_exception_handler(ExceptionHandlerImpl(app_name, notifier))
+    global TASKS
+    TASKS = {
+        k: hook_task(v, k, notifier, config_file=config_file) for k, v in TASKS.items()
+    }
+    app.run(partial(pseudo_main, db=db))
