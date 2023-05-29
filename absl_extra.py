@@ -44,7 +44,7 @@ class BaseNotifier:
 if util.find_spec("slack_sdk"):
     import slack_sdk
 
-    class SlackBaseNotifier(BaseNotifier):
+    class SlackNotifier(BaseNotifier):
         def __init__(self, slack_token: str, channel_id: str):
             self.slack_token = slack_token
             self.channel_id = channel_id

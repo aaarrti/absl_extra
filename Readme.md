@@ -17,22 +17,22 @@ import os
 from pymongo.collection import Collection
 from ml_collections import ConfigDict
 from absl import logging
-from absl_extra import register_task, SlackBaseNotifier, MongoConfig, run
+from absl_extra import register_task, SlackNotifier, MongoConfig, run
 
 
 @register_task
 def main(config: ConfigDict, db: Collection) -> None:
-    logging.info("Doing some heavy lifting...")
+  logging.info("Doing some heavy lifting...")
 
 
 if __name__ == "__main__":
-    run(
-        config_file="config.py",
-        mongo_config=MongoConfig(
-            uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
-        ),
-        notifier=SlackBaseNotifier(
-            slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
-        ),
-    )
+  run(
+    config_file="config.py",
+    mongo_config=MongoConfig(
+      uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
+    ),
+    notifier=SlackNotifier(
+      slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
+    ),
+  )
 ```
