@@ -94,7 +94,7 @@ if util.find_spec("slack_sdk"):
                         },
                     }
                 ],
-                text="Job Finished!",
+                text="Job Failed!",
             )
 
 else:
