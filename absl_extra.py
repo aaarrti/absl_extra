@@ -145,7 +145,11 @@ def register_task(fn: Callable, name: str | Callable[[], str] = "main"):
 
 
 def hook_task(
-    task: Callable, task_name: str, notifier: BaseNotifier, config_file: str | None
+    task: Callable,
+    app_name: str,
+    task_name: str,
+    notifier: BaseNotifier,
+    config_file: str | None,
 ) -> Callable:
     @wraps(task)
     def wrapper(*, db=None):
@@ -163,7 +167,7 @@ def hook_task(
                 f"Config: {json.dumps(config.value, sort_keys=True, indent=4)}"
             )
         logging.info("-" * 50)
-        notifier.notify_job_started(task_name)
+        notifier.notify_job_started(f"{app_name}.{task_name}")
 
         kwargs = {}
         if db is not None:
@@ -172,7 +176,7 @@ def hook_task(
             kwargs["config"] = config
 
         ret_val = task(**kwargs)
-        notifier.notify_job_finished(task_name)
+        notifier.notify_job_finished(f"{app_name}.{task_name}")
         return ret_val
 
     return wrapper
@@ -203,6 +207,13 @@ def run(
     app.install_exception_handler(ExceptionHandlerImpl(app_name, notifier))
     global TASKS
     TASKS = {
-        k: hook_task(v, k, notifier, config_file=config_file) for k, v in TASKS.items()
+        k: hook_task(
+            task=v,
+            task_name=k,
+            notifier=notifier,
+            config_file=config_file,
+            app_name=app_name,
+        )
+        for k, v in TASKS.items()
     }
     app.run(partial(pseudo_main, db=db))
