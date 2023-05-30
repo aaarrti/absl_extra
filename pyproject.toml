@@ -1,6 +1,6 @@
 [project]
 name = "absl_extra"
-version = "0.0.12"
+version = "0.0.13"
 description = "A wrapper to run and monitor absl app."
 readme = "Readme.md"
 requires-python = ">=3.8"
@@ -21,7 +21,10 @@ dev = ["black"]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]
 slack = ["slack_sdk"]
-tensorflow = ["tensorflow"]
+tensorflow = [
+    "tensorflow; sys_platform == 'linux'",
+    "tensorflow_macos; sys_platform == 'darwin'"
+]
 
 
 [project.urls]

@@ -4,7 +4,15 @@ import inspect
 import json
 from functools import wraps, partial
 from importlib import util
-from typing import Callable, NamedTuple, TypeVar, Mapping
+from typing import (
+    Callable,
+    NamedTuple,
+    TypeVar,
+    Mapping,
+    Protocol,
+    ContextManager,
+    Type,
+)
 from contextlib import contextmanager
 
 from absl import app, flags, logging
@@ -168,6 +176,11 @@ def hook_task(
                 f"Config: {json.dumps(config.value, sort_keys=True, indent=4)}"
             )
         logging.info("-" * 50)
+        if util.find_spec("tensorflow") is not None:
+            import tensorflow as tf
+
+            logging.info(f"TF decices -> {tf.config.list_logical_devices()}")
+
         notifier.notify_job_started(f"{app_name}.{task_name}")
 
         kwargs = {}
@@ -233,13 +246,20 @@ if util.find_spec("tensorflow"):
 
         return wrapper
 
+    class StrategyLike(Protocol):
+        def scope(self) -> ContextManager:
+            ...
+
     class NoOpStrategy:
         @contextmanager
         def scope(self):
             yield
 
-    def make_strategy():
-        if len(tf.config.list_logical_devices("GPU")) >= 2:
-            return tf.distribute.MirroredStrategy()
-        else:
-            return NoOpStrategy()
+    def make_strategy(
+        strategy_cls: Callable[[], StrategyLike] | None = None
+    ) -> StrategyLike:
+        if strategy_cls is None:
+            strategy_cls = tf.distribute.MirroredStrategy
+        if len(tf.config.list_logical_devices("GPU")) <= 1:
+            strategy_cls = NoOpStrategy
+        return strategy_cls()
