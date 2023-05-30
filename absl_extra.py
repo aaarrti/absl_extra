@@ -5,6 +5,7 @@ import json
 from functools import wraps, partial
 from importlib import util
 from typing import Callable, NamedTuple, TypeVar, Mapping
+from contextlib import contextmanager
 
 from absl import app, flags, logging
 
@@ -217,3 +218,28 @@ def run(
         for k, v in TASKS.items()
     }
     app.run(partial(pseudo_main, db=db))
+
+
+if util.find_spec("tensorflow"):
+    import tensorflow as tf
+
+    def requires_gpu(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if len(tf.config.list_logical_devices("GPU")) == 0:
+                raise RuntimeError("No GPU available.")
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    class NoOpStrategy:
+        @contextmanager
+        def scope(self):
+            yield
+
+    def make_strategy():
+        if len(tf.config.list_logical_devices("GPU")) >= 2:
+            return tf.distribute.MirroredStrategy()
+        else:
+            return NoOpStrategy()
