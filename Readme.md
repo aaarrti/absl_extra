@@ -36,3 +36,9 @@ if __name__ == "__main__":
     ),
   )
 ```
+
+
+# TODO
+- global app state for different tasks
+- list of pre/post hooks 
+- keras callback with notifier?

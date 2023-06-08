@@ -1,6 +1,6 @@
 [project]
 name = "absl_extra"
-version = "0.0.13"
+version = "0.0.14"
 description = "A wrapper to run and monitor absl app."
 readme = "Readme.md"
 requires-python = ">=3.8"
@@ -17,7 +17,11 @@ dependencies = [
     "absl_py"
 ]
 [project.optional-dependencies]
-dev = ["black"]
+dev = [
+    "black",
+    "pytest",
+    "absl_extra[mongo,ml_collections,slack,tensorflow]"
+]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]
 slack = ["slack_sdk"]
