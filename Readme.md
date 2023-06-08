@@ -8,7 +8,6 @@ It will:
 - Log parsed CLI flags from `absl.flags.FLAGS` and config values from `config_file:get_config()`
 - Inject `ml_collections.ConfigDict` from `config_file`, if kwarg provided.
 - Inject `pymongo.collection.Collection` if `mongo_config` kwarg provided.
-- `log_after` and `log_before` decorators, which proved extremely usefully for print-debugging.
 
 Minimal example
 
@@ -17,28 +16,33 @@ import os
 from pymongo.collection import Collection
 from ml_collections import ConfigDict
 from absl import logging
-from absl_extra import register_task, SlackNotifier, MongoConfig, run
+import tensorflow as tf
+
+from absl_extra import MongoConfig, register_task, run
+from absl_extra.notifier import SlackNotifier
+from absl_extra.tf_utils import requires_gpu, supports_mixed_precision, make_gpu_strategy
 
 
 @register_task
+@requires_gpu
 def main(config: ConfigDict, db: Collection) -> None:
-  logging.info("Doing some heavy lifting...")
+    if supports_mixed_precision():
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+    
+    with make_gpu_strategy().scope():
+        logging.info("Doing some heavy lifting...")    
 
 
 if __name__ == "__main__":
-  run(
-    config_file="config.py",
-    mongo_config=MongoConfig(
-      uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"
-    ),
-    notifier=SlackNotifier(
-      slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]
-    ),
-  )
+    run(
+        config_file="config.py",
+        mongo_config=MongoConfig(uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"),
+        notifier=SlackNotifier(slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]),
+    )
 ```
 
 
-# TODO
+# Planned for:
 - global app state for different tasks
 - list of pre/post hooks 
-- keras callback with notifier?
+- keras callback with notifier
