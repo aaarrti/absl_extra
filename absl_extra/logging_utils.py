@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Callable, ParamSpec, TypeVar
+from typing import Callable, TypeVar
 
 from absl import logging
 
 R = TypeVar("R")
-P = ParamSpec("P")
 
 
 def log_before(
-    func: Callable[[P], R], logger: Callable[[str], None] = logging.debug
-) -> Callable[[P], R]:
+    func: Callable[[...], R], logger: Callable[[str], None] = logging.debug
+) -> Callable[[...], R]:
     """
 
     Parameters
@@ -26,7 +25,7 @@ def log_before(
     """
 
     @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args, **kwargs) -> R:
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
         func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
         logger(
@@ -38,8 +37,8 @@ def log_before(
 
 
 def log_after(
-    func: Callable[[P], R], logger: Callable[[str], None] = logging.debug
-) -> Callable[[P], R]:
+    func: Callable[[...], R], logger: Callable[[str], None] = logging.debug
+) -> Callable[[...], R]:
     """
     Log's function's return value.
 
@@ -59,7 +58,7 @@ def log_after(
     """
 
     @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args, **kwargs) -> R:
         retval = func(*args, **kwargs)
         logger(
             f"Exited {func.__module__}.{func.__qualname__}(...) with value: "

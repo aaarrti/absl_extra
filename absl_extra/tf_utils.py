@@ -2,7 +2,6 @@ from __future__ import annotations
 import functools
 from typing import (
     Callable,
-    ParamSpec,
     TypeVar,
     Protocol,
     ContextManager,
@@ -15,11 +14,12 @@ import tensorflow as tf
 import platform
 
 
-P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def requires_gpu(func: Callable[[P], R], linux_only: bool = False) -> Callable[[P], R]:
+def requires_gpu(
+    func: Callable[[...], R], linux_only: bool = False
+) -> Callable[[...], R]:
     """
     Fail if function is executing on host without access to GPU(s).
     Useful for early detecting container runtime misconfigurations.
@@ -41,7 +41,7 @@ def requires_gpu(func: Callable[[P], R], linux_only: bool = False) -> Callable[[
     """
 
     @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args, **kwargs) -> R:
         if linux_only and platform.system() != "linux":
             return func(*args, **kwargs)
 
@@ -60,7 +60,7 @@ class StrategyLike(Protocol):
 
 
 class NoOpStrategy:
-    def __init__(self, **kwargs: P.kwargs):
+    def __init__(self, **kwargs):
         pass
 
     @contextmanager
@@ -119,7 +119,7 @@ def make_tpu_strategy(
 
 
 def make_gpu_strategy(
-    strategy_cls: Type[StrategyLike] | None = None, **kwargs: P.kwargs
+    strategy_cls: Type[StrategyLike] | None = None, **kwargs
 ) -> StrategyLike:
     """
     Useful for testing locally scripts, which must run on multiple GPUs, without changing scripts structure.

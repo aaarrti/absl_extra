@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 from functools import wraps, partial
 from importlib import util
-from typing import Callable, NamedTuple, TypeVar, Mapping, ParamSpec
+from typing import Callable, NamedTuple, TypeVar, Mapping
 
 from absl import app, flags, logging
 
 from absl_extra.notifier import BaseNotifier
 
-P = ParamSpec("P")
 T = TypeVar("T", bound=Callable, covariant=True)
 FLAGS = flags.FLAGS
 
@@ -45,7 +44,7 @@ _TASKS = {}
 
 
 def register_task(
-    fn: Callable[[str, ParamSpec.kwargs], None], name: str | Callable[[], str] = "main"
+    fn: Callable[[str], None], name: str | Callable[[], str] = "main"
 ) -> None:
     """
 
@@ -66,12 +65,12 @@ def register_task(
 
 
 def hook_task(
-    task: Callable[[P.kwargs], None],
+    task: Callable[[...], None],
     app_name: str,
     task_name: str,
     notifier: BaseNotifier,
     config_file: str | None,
-) -> Callable[[P.kwargs], None]:
+) -> Callable[[...], None]:
     @wraps(task)
     def wrapper(*, db=None):
         logging.info("-" * 50)
@@ -129,7 +128,7 @@ def run(
 
     """
 
-    def pseudo_main(cmd, **kwargs: P.kwargs) -> None:
+    def pseudo_main(cmd, **kwargs) -> None:
         TASKS[FLAGS.task](**kwargs)
 
     if notifier is None:
