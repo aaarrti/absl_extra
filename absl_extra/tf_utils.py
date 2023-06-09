@@ -1,5 +1,6 @@
 from __future__ import annotations
 import functools
+import logging
 from typing import (
     Callable,
     TypeVar,
@@ -102,6 +103,7 @@ def make_tpu_strategy(
     >>>     model.fit(...)
     """
     if platform.system().lower() != "linux":
+        logging.warning("Not running on linux, falling back to NoOpStrategy.")
         return NoOpStrategy()
 
     if cluster_resolver_kwargs is None:
@@ -147,6 +149,7 @@ def make_gpu_strategy(
     """
     n_gpus = len(tf.config.list_physical_devices("GPU"))
     if n_gpus == 0:
+        logging.warning("No GPUs found, falling back to NoOpStrategy.")
         return NoOpStrategy()
     if n_gpus == 1:
         return tf.distribute.OneDeviceStrategy(**kwargs)
@@ -159,6 +162,9 @@ def make_gpu_strategy(
 
 def supports_mixed_precision() -> bool:
     """Check if mixed precision is supported by available GPUs."""
+    tpus = tf.config.list_physical_devices("GPU")
+    if len(tpus) != 0:
+        logging.info("Mixed precision OK. You should use mixed_bfloat16 for TPU.")
     gpus = tf.config.list_physical_devices("GPU")
     if len(gpus) == 0:
         return False
@@ -166,5 +172,6 @@ def supports_mixed_precision() -> bool:
     for details in gpu_details_list:
         cc = details.get("compute_capability")
         if cc >= (7, 0):
+            logging.info("Mixed precision OK. You should use mixed_float16 for GPU.")
             return True
     return False
