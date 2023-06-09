@@ -162,7 +162,7 @@ def make_gpu_strategy(
 
 def supports_mixed_precision() -> bool:
     """Check if mixed precision is supported by available GPUs."""
-    tpus = tf.config.list_physical_devices("TPU")
+    tpus = tf.config.list_logical_devices("TPU")
     if len(tpus) != 0:
         logging.info("Mixed precision OK. You should use mixed_bfloat16 for TPU.")
     gpus = tf.config.list_physical_devices("GPU")
