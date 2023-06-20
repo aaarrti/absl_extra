@@ -69,12 +69,7 @@ class NoOpStrategy:
         yield
 
 
-def make_tpu_strategy(
-    *,
-    cluster_resolver_kwargs: Mapping[str, ...] | None = None,
-    connector_kwargs: Mapping[str, ...] | None = None,
-    strategy_kwargs: Mapping[str, ...] | None = None,
-) -> StrategyLike:
+def make_tpu_strategy() -> StrategyLike:
     """
     Used for testing locally scripts, which them must run on Colab TPUs. Allows to keep the same scripts,
     without changing strategy assignment.
@@ -106,22 +101,15 @@ def make_tpu_strategy(
         logging.warning("Not running on linux, falling back to NoOpStrategy.")
         return NoOpStrategy()
 
-    if cluster_resolver_kwargs is None:
-        cluster_resolver_kwargs = {}
-    if connector_kwargs is None:
-        connector_kwargs = {}
-    if strategy_kwargs is None:
-        strategy_kwargs = {}
-
-    tpu = tf.distribute.cluster_resolver.TPUClusterResolver(**cluster_resolver_kwargs)
-    tf.config.experimental_connect_to_cluster(tpu, **connector_kwargs)
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tf.config.experimental_connect_to_cluster(tpu)
     tf.tpu.experimental.initialize_tpu_system(tpu)
-    strategy = tf.distribute.TPUStrategy(tpu, **strategy_kwargs)
+    strategy = tf.distribute.TPUStrategy(tpu, experimental_spmd_xla_partitioning=True)
     return strategy
 
 
 def make_gpu_strategy(
-    strategy_cls: Type[StrategyLike] | None = None, **kwargs
+    strategy_cls: Type[StrategyLike] | None = None, force: bool = False, **kwargs
 ) -> StrategyLike:
     """
     Useful for testing locally scripts, which must run on multiple GPUs, without changing scripts structure.
@@ -130,6 +118,8 @@ def make_gpu_strategy(
     ----------
     strategy_cls:
         Optional class of the strategy to use. Can be used to choose between e.g., MirroredStrategy and CentralStorage strategies.
+    force:
+
     kwargs:
         Kwargs passed to strategy class __init__ method.
 
@@ -147,12 +137,16 @@ def make_gpu_strategy(
     >>>     model = make_model(...)
     >>>     model.fit(...)
     """
-    n_gpus = len(tf.config.list_physical_devices("GPU"))
+    gpus = tf.config.list_physical_devices("GPU")
+    n_gpus = len(gpus)
     if n_gpus == 0:
         logging.warning("No GPUs found, falling back to NoOpStrategy.")
         return NoOpStrategy()
     if n_gpus == 1:
-        return tf.distribute.OneDeviceStrategy(**kwargs)
+        if force:
+            return tf.distribute.OneDeviceStrategy(gpus[0])
+        else:
+            return NoOpStrategy()
 
     if strategy_cls is None:
         strategy_cls = tf.distribute.MirroredStrategy
