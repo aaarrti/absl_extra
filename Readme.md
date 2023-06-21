@@ -25,7 +25,7 @@ from absl_extra.tf_utils import requires_gpu, supports_mixed_precision, make_gpu
 
 @register_task
 @requires_gpu
-def main(config: ConfigDict, db: Collection) -> None:
+def main(cmd: str, config: ConfigDict, db: Collection) -> None:
     if supports_mixed_precision():
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
     

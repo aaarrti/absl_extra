@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from functools import wraps, partial
+from functools import wraps
 from importlib import util
 from typing import Callable, NamedTuple, TypeVar, Mapping, List
 
@@ -14,7 +14,9 @@ FLAGS = flags.FLAGS
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
+    from pymongo.collection import Collection
 else:
+    Collection = None
     logging.warning("pymongo not installed.")
 
 if util.find_spec("ml_collections"):
@@ -26,7 +28,7 @@ else:
 class MongoConfig(NamedTuple):
     uri: str
     db_name: str
-    collection: str | None = None
+    collection: str
 
 
 class _ExceptionHandlerImpl(app.ExceptionHandler):
@@ -40,7 +42,7 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
 
 class TaskT(NamedTuple):
     fn: Callable
-    name: str | Callable[[], str]
+    name: str | Callable[[str, ...], str]
     init_callbacks: List[Callable[[...], None]] = []
 
 
@@ -48,14 +50,21 @@ _TASK_STORE = None
 
 
 def register_task(
-    fn: Callable[[str], None], name: str | Callable[[], str] = "main"
+    fn: Callable[[str], None],
+    name: str | Callable[[], str] = "main",
+    init_callback: List[Callable[[...], None]] = None,
 ) -> None:
     """
 
     Parameters
     ----------
-    fn
-    name
+    fn:
+        Function to execute.
+    name:
+        Name to be used for lifecycle reporting.
+    init_callback:
+        List of callback, which must be called on initialization.
+        By default, will print parsed absl.flags and ml_collection.ConfigDict to stdout.
 
     Returns
     -------
@@ -69,10 +78,11 @@ def pseudo_main(
     task: TaskT,
     app_name: str,
     notifier: BaseNotifier,
-    config_file: str | None,
-) -> Callable[[...], None]:
-    @wraps(task)
-    def wrapper(*, db=None):
+    config_file: str | None = None,
+    db: Collection | None = None,
+) -> Callable[[str, ...], None]:
+    @wraps(task.fn)
+    def wrapper(cmd: str):
         if isinstance(task.name, Callable):
             task_name = task.name()
         else:
@@ -82,26 +92,21 @@ def pseudo_main(
         logging.info(
             f"Flags: {json.dumps(flags.FLAGS.flag_values_dict(), sort_keys=True, indent=4)}"
         )
+
+        kwargs = {}
+
         if util.find_spec("ml_collections") and config_file is not None:
             config = config_flags.DEFINE_config_file("config", default=config_file)
-        else:
-            config = None
-
-        if config is not None:
             config = config.value
             logging.info(
                 f"Config: {json.dumps(dict(config), sort_keys=True, indent=4)}"
             )
+            kwargs["config"] = config
         logging.info("-" * 50)
-        notifier.notify_job_started(f"{app_name}.{task_name}")
-
-        kwargs = {}
         if db is not None:
             kwargs["db"] = db
-        if config is not None:
-            kwargs["config"] = config
-
-        ret_val = task.fn(**kwargs)
+        notifier.notify_job_started(f"{app_name}.{task_name}")
+        ret_val = task.fn(cmd, **kwargs)
         notifier.notify_job_finished(f"{app_name}.{task_name}")
         return ret_val
 
@@ -113,15 +118,19 @@ def run(
     notifier: BaseNotifier | None = None,
     config_file: str | None = None,
     mongo_config: MongoConfig | Mapping[str, ...] | None = None,
-):
+) -> None:
     """
 
     Parameters
     ----------
-    app_name
-    notifier
-    config_file
-    mongo_config
+    app_name:
+        Name of the task.
+    notifier:
+        Notifier instance, which monitors execution state.
+    config_file:
+        Optional, path to ml_collection config file.
+    mongo_config:
+        Optional, NamedTuple or Dict with MongoDB connection credentials.
 
     Returns
     -------
@@ -133,9 +142,11 @@ def run(
     if util.find_spec("pymongo") and mongo_config is not None:
         if isinstance(mongo_config, Mapping):
             mongo_config = MongoConfig(**mongo_config)
-        db = MongoClient(mongo_config.uri).get_database(mongo_config.db_name)
-        if mongo_config.collection is not None:
-            db = db.get_collection(mongo_config.collection)
+        db = (
+            MongoClient(mongo_config.uri)
+            .get_database(mongo_config.db_name)
+            .get_collection(mongo_config.collection)
+        )
     else:
         db = None
 
@@ -146,5 +157,6 @@ def run(
         notifier=notifier,
         config_file=config_file,
         app_name=app_name,
+        db=db,
     )
-    app.run(partial(task_fn, db=db))
+    app.run(task_fn)

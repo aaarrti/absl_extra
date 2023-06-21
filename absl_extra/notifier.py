@@ -11,7 +11,7 @@ class BaseNotifier:
         logging.info(f"Job {name} finished.")
 
     def notify_job_failed(self, name: str, exception: Exception):
-        logging.fatal(f"Job {name} failed with {exception}")
+        logging.error(f"Job {name} failed with {exception}")
 
 
 if util.find_spec("slack_sdk"):
