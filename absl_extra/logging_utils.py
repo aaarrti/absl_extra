@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Callable, TypeVar
+from importlib import util
+from typing import Callable, TypeVar, Literal
 
 from absl import logging
 
 R = TypeVar("R")
+LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 
 
 def log_before(
@@ -67,3 +69,24 @@ def log_after(
         return retval
 
     return wrapper
+
+
+def setup_logging(
+    *,
+    log_format: str = "%(asctime)s:[%(filename)s:%(lineno)s->%(funcName)s()]:%(levelname)s: %(message)s",
+    log_level: LogLevel = "DEBUG",
+):
+    import logging
+    import absl.logging
+
+    logging.basicConfig(
+        level=logging.getLevelName(log_level),
+        format=log_format,
+    )
+
+    absl.logging.set_verbosity(absl.logging.converter.ABSL_NAMES[log_level])
+
+    if util.find_spec("tensorflow"):
+        import tensorflow as tf
+
+        tf.get_logger().setLevel(log_level)
