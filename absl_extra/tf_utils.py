@@ -162,6 +162,8 @@ def supports_mixed_precision() -> bool:
     gpu_details_list = [tf.config.experimental.get_device_details(g) for g in gpus]
     for details in gpu_details_list:
         cc = details.get("compute_capability")
+        if cc is None:
+            return False
         if cc >= (7, 0):
             logging.info("Mixed precision OK. You should use mixed_float16 for GPU.")
             return True
