@@ -46,7 +46,7 @@ def requires_gpu(
         if linux_only and platform.system() != "linux":
             return func(*args, **kwargs)
 
-        if len(tf.config.list_logical_devices("GPU")) == 0:
+        if len(tf.config.list_physical_devices("GPU")) == 0:
             raise RuntimeError("No GPU available.")
 
         return func(*args, **kwargs)
