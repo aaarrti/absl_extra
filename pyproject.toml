@@ -1,6 +1,6 @@
 [project]
 name = "absl_extra"
-version = "0.0.1dev2"
+version = "0.0.1dev3"
 description = "A wrapper to run and monitor absl app."
 readme = "Readme.md"
 requires-python = ">=3.8"

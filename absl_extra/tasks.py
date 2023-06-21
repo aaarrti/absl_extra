@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from functools import wraps, partial
 from importlib import util
-from typing import Callable, NamedTuple, TypeVar, Mapping
+from typing import Callable, NamedTuple, TypeVar, Mapping, List
 
 from absl import app, flags, logging
 
@@ -11,8 +11,6 @@ from absl_extra.notifier import BaseNotifier
 
 T = TypeVar("T", bound=Callable, covariant=True)
 FLAGS = flags.FLAGS
-
-flags.DEFINE_string("task", default="main", help="Name of task to run.")
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
@@ -40,7 +38,13 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
         self.notifier.notify_job_failed(self.name, exception)
 
 
-_TASKS = {}
+class TaskT(NamedTuple):
+    fn: Callable
+    name: str | Callable[[], str]
+    init_callbacks: List[Callable[[...], None]] = []
+
+
+_TASK_STORE = None
 
 
 def register_task(
@@ -57,22 +61,23 @@ def register_task(
     -------
 
     """
-    if isinstance(name, Callable):
-        name = name()
-    if name in _TASKS:
-        raise RuntimeError(f"Can't register 2 tasks with same name: {name}")
-    _TASKS[name] = fn
+    global _TASK_STORE
+    _TASK_STORE = TaskT(fn=fn, name=name)
 
 
-def hook_task(
-    task: Callable[[...], None],
+def pseudo_main(
+    task: TaskT,
     app_name: str,
-    task_name: str,
     notifier: BaseNotifier,
     config_file: str | None,
 ) -> Callable[[...], None]:
     @wraps(task)
     def wrapper(*, db=None):
+        if isinstance(task.name, Callable):
+            task_name = task.name()
+        else:
+            task_name = task.name
+
         logging.info("-" * 50)
         logging.info(
             f"Flags: {json.dumps(flags.FLAGS.flag_values_dict(), sort_keys=True, indent=4)}"
@@ -88,11 +93,6 @@ def hook_task(
                 f"Config: {json.dumps(dict(config), sort_keys=True, indent=4)}"
             )
         logging.info("-" * 50)
-        if util.find_spec("tensorflow") is not None:
-            import tensorflow as tf
-
-            logging.info(f"TF decices -> {tf.config.list_logical_devices()}")
-
         notifier.notify_job_started(f"{app_name}.{task_name}")
 
         kwargs = {}
@@ -101,7 +101,7 @@ def hook_task(
         if config is not None:
             kwargs["config"] = config
 
-        ret_val = task(**kwargs)
+        ret_val = task.fn(**kwargs)
         notifier.notify_job_finished(f"{app_name}.{task_name}")
         return ret_val
 
@@ -127,10 +127,6 @@ def run(
     -------
 
     """
-
-    def pseudo_main(cmd, **kwargs) -> None:
-        TASKS[FLAGS.task](**kwargs)
-
     if notifier is None:
         notifier = BaseNotifier()
 
@@ -144,15 +140,11 @@ def run(
         db = None
 
     app.install_exception_handler(_ExceptionHandlerImpl(app_name, notifier))
-    global _TASKS
-    TASKS = {
-        k: hook_task(
-            task=v,
-            task_name=k,
-            notifier=notifier,
-            config_file=config_file,
-            app_name=app_name,
-        )
-        for k, v in _TASKS.items()
-    }
-    app.run(partial(pseudo_main, db=db))
+
+    task_fn = pseudo_main(
+        task=_TASK_STORE,
+        notifier=notifier,
+        config_file=config_file,
+        app_name=app_name,
+    )
+    app.run(partial(task_fn, db=db))

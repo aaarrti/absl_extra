@@ -8,7 +8,6 @@ from typing import (
     ContextManager,
     runtime_checkable,
     Type,
-    Mapping,
 )
 from contextlib import contextmanager
 import tensorflow as tf
@@ -44,11 +43,15 @@ def requires_gpu(
     @functools.wraps(func)
     def wrapper(*args, **kwargs) -> R:
         if linux_only and platform.system() != "linux":
+            logging.info(
+                "Not running on linux, and linux_only==True, ignoring GPU strategy check."
+            )
             return func(*args, **kwargs)
 
-        if len(tf.config.list_physical_devices("GPU")) == 0:
+        gpus = tf.config.list_physical_devices("GPU")
+        logging.info(f"Available GPUs -> {gpus}")
+        if len(gpus) == 0:
             raise RuntimeError("No GPU available.")
-
         return func(*args, **kwargs)
 
     return wrapper
@@ -77,12 +80,6 @@ def make_tpu_strategy() -> StrategyLike:
 
     Parameters
     ----------
-    cluster_resolver_kwargs:
-        Kwargs passed to TPUClusterResolver.
-    connector_kwargs:
-        Kwargs passed to experimental_connect_to_cluster.
-    strategy_kwargs:
-        Kwargs passed to TPUStrategy.
 
     Returns
     -------
