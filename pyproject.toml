@@ -29,6 +29,10 @@ tensorflow = [
     "tensorflow; sys_platform == 'linux'",
     "tensorflow_macos; sys_platform == 'darwin'"
 ]
+jax = [
+    "jax",
+    "jaxlib"
+]
 
 
 [project.urls]
