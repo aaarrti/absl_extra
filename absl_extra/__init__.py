@@ -16,9 +16,7 @@ from absl_extra.src.logging_utils import log_before, log_after, setup_logging
 if is_lib_installed("pymongo"):
     from absl_extra.src.tasks import MongoConfig
 if is_lib_installed("tensorflow"):
-    from absl_extra.src.tf_utils import (
-        supports_mixed_precision,
-        make_gpu_strategy,
-        make_tpu_strategy,
-        requires_gpu,
-    )
+    from absl_extra.src import tf_utils
+
+if is_lib_installed("jax"):
+    from absl_extra.src import jax_utils
