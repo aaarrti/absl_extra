@@ -7,7 +7,7 @@ from typing import Callable, NamedTuple, TypeVar, Mapping, List
 
 from absl import app, flags, logging
 
-from absl_extra.notifier import BaseNotifier
+from absl_extra.src.notifier import BaseNotifier
 
 T = TypeVar("T", bound=Callable, covariant=True)
 FLAGS = flags.FLAGS
