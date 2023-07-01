@@ -115,7 +115,7 @@ def pseudo_main(
 
 def run(
     app_name: str | Callable[[], str] = "app",
-    notifier: BaseNotifier | None = None,
+    notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
     config_file: str | None = None,
     mongo_config: MongoConfig | Mapping[str, ...] | None = None,
 ) -> None:
@@ -136,6 +136,8 @@ def run(
     -------
 
     """
+    if isinstance(notifier, Callable):
+        notifier = notifier()
     if notifier is None:
         notifier = BaseNotifier()
 
