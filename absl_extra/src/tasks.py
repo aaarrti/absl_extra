@@ -99,7 +99,7 @@ def pseudo_main(
             config = config_flags.DEFINE_config_file("config", default=config_file)
             config = config.value
             logging.info(
-                f"Config: {json.dumps(dict(config), sort_keys=True, indent=4)}"
+                f"Config: {json.dumps(config.to_dict(), sort_keys=True, indent=4)}"
             )
             kwargs["config"] = config
         logging.info("-" * 50)
