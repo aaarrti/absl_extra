@@ -3,23 +3,18 @@ from __future__ import annotations
 import functools
 import inspect
 from importlib import util
-from typing import Callable, TypeVar, Literal, ParamSpecArgs, ParamSpecKwargs
+from typing import Callable, TypeVar, Literal
 
 from absl import logging
 
-A = ParamSpecArgs("A")
-K = ParamSpecKwargs("K")
-R = TypeVar("R")
-LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
-Func = Callable[[A, K], R]
-Logger = Callable[[str], None]
+C = TypeVar("C", bound=Callable)
 
 
-def log_exception(func: Func, logger: Logger = logging.error) -> Func:
+def log_exception(func: C, logger: Callable[[str], None] = logging.error) -> C:
     """Log raised exception, and argument which caused it."""
 
     @functools.wraps(func)
-    def wrapper(*args: A, **kwargs: K) -> R:
+    def wrapper(*args, **kwargs):
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
         func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
 
@@ -34,11 +29,11 @@ def log_exception(func: Func, logger: Logger = logging.error) -> Func:
     return wrapper
 
 
-def log_before(func: Func, logger: Logger = logging.debug) -> Func:
+def log_before(func: C, logger: Callable[[str], None] = logging.debug) -> C:
     """Log argument and function name."""
 
     @functools.wraps(func)
-    def wrapper(*args: A, **kwargs: K) -> R:
+    def wrapper(*args, **kwargs):
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
         func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
         logger(
@@ -49,11 +44,11 @@ def log_before(func: Func, logger: Logger = logging.debug) -> Func:
     return wrapper
 
 
-def log_after(func: Func, logger: Logger = logging.debug) -> Func:
+def log_after(func, logger: Callable[[str], None] = logging.debug):
     """Log's function's return value."""
 
     @functools.wraps(func)
-    def wrapper(*args: A, **kwargs: K) -> R:
+    def wrapper(*args, **kwargs):
         retval = func(*args, **kwargs)
         logger(
             f"Exited {func.__module__}.{func.__qualname__}(...) with value: "
@@ -67,7 +62,7 @@ def log_after(func: Func, logger: Logger = logging.debug) -> Func:
 def setup_logging(
     *,
     log_format: str = "%(asctime)s:[%(filename)s:%(lineno)s->%(funcName)s()]:%(levelname)s: %(message)s",
-    log_level: LogLevel = "DEBUG",
+    log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "DEBUG",
 ):
     import logging
     import absl.logging

@@ -6,7 +6,6 @@ from typing import (
     TypeVar,
     Protocol,
     ContextManager,
-    runtime_checkable,
     Type,
 )
 from contextlib import contextmanager
@@ -14,12 +13,10 @@ import tensorflow as tf
 import platform
 
 
-R = TypeVar("R")
+C = TypeVar("C", bound=Callable)
 
 
-def requires_gpu(
-    func: Callable[[...], R], linux_only: bool = False
-) -> Callable[[...], R]:
+def requires_gpu(func: C, linux_only: bool = False) -> C:
     """
     Fail if function is executing on host without access to GPU(s).
     Useful for early detecting container runtime misconfigurations.
@@ -57,7 +54,6 @@ def requires_gpu(
     return wrapper
 
 
-@runtime_checkable
 class StrategyLike(Protocol):
     def scope(self) -> ContextManager:
         ...
