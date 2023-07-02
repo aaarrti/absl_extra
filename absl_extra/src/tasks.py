@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from functools import wraps
 from importlib import util
-from typing import Callable, NamedTuple, TypeVar, Mapping, List
+from typing import Callable, List, Mapping, NamedTuple, TypeVar
 
 from absl import app, flags, logging
 
-from absl_extra.src.notifier import BaseNotifier
+from absl_extra.src.notifier import BaseNotifier, LoggingNotifier
 
 T = TypeVar("T", bound=Callable, covariant=True)
 FLAGS = flags.FLAGS
@@ -139,7 +139,7 @@ def run(
     if isinstance(notifier, Callable):
         notifier = notifier()
     if notifier is None:
-        notifier = BaseNotifier()
+        notifier = LoggingNotifier
 
     if util.find_spec("pymongo") and mongo_config is not None:
         if isinstance(mongo_config, Mapping):

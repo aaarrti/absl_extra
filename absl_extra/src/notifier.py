@@ -1,9 +1,41 @@
 from __future__ import annotations
-from absl import logging
+
+from abc import ABC, abstractmethod
 from importlib import util
+from typing import Callable
+
+from absl import logging
 
 
-class BaseNotifier:
+class BaseNotifier(ABC):
+    @abstractmethod
+    def notify_job_started(self, name: str):
+        raise NotImplementedError
+
+    @abstractmethod
+    def notify_job_finished(self, name: str):
+        raise NotImplementedError
+
+    @abstractmethod
+    def notify_job_failed(self, name: str, exception: Exception):
+        raise NotImplementedError
+
+
+class NoOpNotifier(BaseNotifier):
+    def notify_job_started(self, name: str):
+        pass
+
+    def notify_job_finished(self, name: str):
+        pass
+
+    def notify_job_failed(self, name: str, exception: Exception):
+        raise NotImplementedError
+
+
+class LoggingNotifier(BaseNotifier):
+    def __init__(self, logger: Callable[[str], None] = logging.info):
+        self.logger = logger
+
     def notify_job_started(self, name: str):
         logging.info(f"Job {name} started.")
 

@@ -7,7 +7,7 @@ def is_lib_installed(name: str) -> bool:
 
 
 from absl_extra.src.tasks import run, register_task
-from absl_extra.src.notifier import BaseNotifier
+from absl_extra.src.notifier import BaseNotifier, NoOpNotifier, LoggingNotifier
 
 if is_lib_installed("slack_sdk"):
     from absl_extra.src.notifier import SlackNotifier

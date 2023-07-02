@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import functools
 import logging
-from typing import Callable, TypeVar
 import platform
+from typing import Callable, TypeVar
 
 import jax
 

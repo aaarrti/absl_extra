@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 import inspect
 from importlib import util
-from typing import Callable, TypeVar, Literal
+from typing import Callable, Literal, TypeVar
 
 from absl import logging
 
@@ -65,6 +65,7 @@ def setup_logging(
     log_level: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "DEBUG",
 ):
     import logging
+
     import absl.logging
 
     logging.basicConfig(

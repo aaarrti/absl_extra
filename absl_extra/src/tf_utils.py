@@ -1,17 +1,12 @@
 from __future__ import annotations
+
 import functools
 import logging
-from typing import (
-    Callable,
-    TypeVar,
-    Protocol,
-    ContextManager,
-    Type,
-)
-from contextlib import contextmanager
-import tensorflow as tf
 import platform
+from contextlib import contextmanager
+from typing import Callable, ContextManager, Protocol, Type, TypeVar
 
+import tensorflow as tf
 
 C = TypeVar("C", bound=Callable)
 
