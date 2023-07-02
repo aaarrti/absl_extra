@@ -3,31 +3,42 @@ from __future__ import annotations
 import functools
 import inspect
 from importlib import util
-from typing import Callable, TypeVar, Literal
+from typing import Callable, TypeVar, Literal, ParamSpecArgs, ParamSpecKwargs
 
 from absl import logging
 
+A = ParamSpecArgs("A")
+K = ParamSpecKwargs("K")
 R = TypeVar("R")
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
+Func = Callable[[A, K], R]
+Logger = Callable[[str], None]
 
 
-def log_before(
-    func: Callable[[...], R], logger: Callable[[str], None] = logging.debug
-) -> Callable[[...], R]:
-    """
-
-    Parameters
-    ----------
-    func
-    logger
-
-    Returns
-    -------
-
-    """
+def log_exception(func: Func, logger: Logger = logging.error) -> Func:
+    """Log raised exception, and argument which caused it."""
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs) -> R:
+    def wrapper(*args: A, **kwargs: K) -> R:
+        func_args = inspect.signature(func).bind(*args, **kwargs).arguments
+        func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
+
+        try:
+            return func(*args, **kwargs)
+        except Exception as ex:
+            logger(
+                f"{func.__module__}.{func.__qualname__} with args ( {func_args_str} ) raised {ex}"
+            )
+            raise ex
+
+    return wrapper
+
+
+def log_before(func: Func, logger: Logger = logging.debug) -> Func:
+    """Log argument and function name."""
+
+    @functools.wraps(func)
+    def wrapper(*args: A, **kwargs: K) -> R:
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
         func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
         logger(
@@ -38,29 +49,11 @@ def log_before(
     return wrapper
 
 
-def log_after(
-    func: Callable[[...], R], logger: Callable[[str], None] = logging.debug
-) -> Callable[[...], R]:
-    """
-    Log's function's return value.
-
-    Parameters
-    ----------
-    func:
-        Function exit from which must be logged.
-    logger:
-        Logger to use, default absl.logging.debug
-
-    Returns
-    -------
-
-    func:
-        Function with the same signature.
-
-    """
+def log_after(func: Func, logger: Logger = logging.debug) -> Func:
+    """Log's function's return value."""
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs) -> R:
+    def wrapper(*args: A, **kwargs: K) -> R:
         retval = func(*args, **kwargs)
         logger(
             f"Exited {func.__module__}.{func.__qualname__}(...) with value: "

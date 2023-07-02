@@ -11,7 +11,12 @@ from absl_extra.src.notifier import BaseNotifier
 
 if is_lib_installed("slack_sdk"):
     from absl_extra.src.notifier import SlackNotifier
-from absl_extra.src.logging_utils import log_before, log_after, setup_logging
+from absl_extra.src.logging_utils import (
+    log_before,
+    log_after,
+    setup_logging,
+    log_exception,
+)
 
 if is_lib_installed("pymongo"):
     from absl_extra.src.tasks import MongoConfig
