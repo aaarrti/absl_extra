@@ -33,8 +33,6 @@ class NoOpNotifier(BaseNotifier):
 
 
 class LoggingNotifier(BaseNotifier):
-    def __init__(self, logger: Callable[[str], None] = logging.info):
-        self.logger = logger
 
     def notify_job_started(self, name: str):
         logging.info(f"Job {name} started.")
