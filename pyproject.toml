@@ -3,7 +3,7 @@ name = "absl_extra"
 version = "0.0.2dev10"
 description = "A wrapper to run and monitor absl app."
 readme = "Readme.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [
     { name = "Artem Sereda", email = "artem.sereda.tub@gmail.com" }
 ]

@@ -7,10 +7,10 @@ from typing import Callable, Literal, TypeVar
 
 from absl import logging
 
-C = TypeVar("C", bound=Callable)
+T = TypeVar("T", bound=Callable)
 
 
-def log_exception(func: C, logger: Callable[[str], None] = logging.error) -> C:
+def log_exception(func: T, logger: Callable[[str], None] = logging.error) -> T:
     """Log raised exception, and argument which caused it."""
 
     @functools.wraps(func)
@@ -29,7 +29,7 @@ def log_exception(func: C, logger: Callable[[str], None] = logging.error) -> C:
     return wrapper
 
 
-def log_before(func: C, logger: Callable[[str], None] = logging.debug) -> C:
+def log_before(func: T, logger: Callable[[str], None] = logging.debug) -> T:
     """Log argument and function name."""
 
     @functools.wraps(func)

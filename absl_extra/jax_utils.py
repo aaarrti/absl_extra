@@ -7,12 +7,10 @@ from typing import Callable, TypeVar
 
 import jax
 
-R = TypeVar("R")
+T = TypeVar("T", bound=Callable)
 
 
-def requires_gpu(
-    func: Callable[[...], R], linux_only: bool = False
-) -> Callable[[...], R]:
+def requires_gpu(func: T, linux_only: bool = False) -> T:
     """
     Fail if function is executing on host without access to GPU(s).
     Useful for early detecting container runtime misconfigurations.

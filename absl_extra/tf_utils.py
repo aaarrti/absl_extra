@@ -8,10 +8,10 @@ from typing import Callable, ContextManager, Protocol, Type, TypeVar
 
 import tensorflow as tf
 
-C = TypeVar("C", bound=Callable)
+T = TypeVar("T", bound=Callable)
 
 
-def requires_gpu(func: C, linux_only: bool = False) -> C:
+def requires_gpu(func: T, linux_only: bool = False) -> T:
     """
     Fail if function is executing on host without access to GPU(s).
     Useful for early detecting container runtime misconfigurations.
