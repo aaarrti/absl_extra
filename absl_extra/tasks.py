@@ -58,7 +58,7 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
         self.notifier = notifier
 
     def handle(self, exception: Exception) -> None:
-        self.notifier.notify_job_failed(self.name, exception)
+        self.notifier.notify_task_failed(self.name, exception)
 
 
 class TaskFn(Protocol):

@@ -8,38 +8,38 @@ from absl import logging
 
 class BaseNotifier(ABC):
     @abstractmethod
-    def notify_Task_started(self, name: str):
+    def notify_task_started(self, name: str):
         raise NotImplementedError
 
     @abstractmethod
-    def notify_Task_finished(self, name: str):
+    def notify_task_finished(self, name: str):
         raise NotImplementedError
 
     @abstractmethod
-    def notify_Task_failed(self, name: str, exception: Exception):
+    def notify_task_failed(self, name: str, exception: Exception):
         raise NotImplementedError
 
 
 class NoOpNotifier(BaseNotifier):
-    def notify_Task_started(self, name: str):
+    def notify_task_started(self, name: str):
         pass
 
-    def notify_Task_finished(self, name: str):
+    def notify_task_finished(self, name: str):
         pass
 
-    def notify_Task_failed(self, name: str, exception: Exception):
+    def notify_task_failed(self, name: str, exception: Exception):
         pass
 
 
 class LoggingNotifier(BaseNotifier):
-    def notify_Task_started(self, name: str):
-        logging.info(f"Task {name} started.")
+    def notify_task_started(self, name: str):
+        logging.info(f"Job {name} started.")
 
-    def notify_Task_finished(self, name: str):
-        logging.info(f"Task {name} finished.")
+    def notify_task_finished(self, name: str):
+        logging.info(f"Job {name} finished.")
 
-    def notify_Task_failed(self, name: str, exception: Exception):
-        logging.error(f"Task {name} failed with {exception}")
+    def notify_task_failed(self, name: str, exception: Exception):
+        logging.error(f"Job {name} failed with {exception}")
 
 
 if util.find_spec("slack_sdk"):
@@ -50,7 +50,7 @@ if util.find_spec("slack_sdk"):
             self.slack_token = slack_token
             self.channel_id = channel_id
 
-        def notify_Task_started(self, name: str):
+        def notify_task_started(self, name: str):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
@@ -59,14 +59,14 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f" :ballot_box_with_check: Task {name} started.",
+                            "text": f" :ballot_box_with_check: Job {name} started.",
                         },
                     }
                 ],
-                text="Task Started!",
+                text="Job Started!",
             )
 
-        def notify_Task_finished(self, name: str):
+        def notify_task_finished(self, name: str):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
@@ -75,14 +75,14 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":white_check_mark: Task {name} finished execution.",
+                            "text": f":white_check_mark: Job {name} finished execution.",
                         },
                     }
                 ],
-                text="Task Finished!",
+                text="Job Finished!",
             )
 
-        def notify_Task_failed(self, name: str, exception: Exception):
+        def notify_task_failed(self, name: str, exception: Exception):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
@@ -91,11 +91,11 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":x: Task {name} failed, reason:\n ```{exception}```",
+                            "text": f":x: Job {name} failed, reason:\n ```{exception}```",
                         },
                     }
                 ],
-                text="Task Failed!",
+                text="Job Failed!",
             )
 
 else:

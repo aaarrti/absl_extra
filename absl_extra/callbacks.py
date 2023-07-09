@@ -45,8 +45,8 @@ def log_params_callback(name: str, *, config: ConfigDict = None, **kwargs):
 
 
 def log_startup_callback(name: str, *, notifier: BaseNotifier, **kwargs):
-    notifier.notify_job_started(name)
+    notifier.notify_task_started(name)
 
 
 def log_shutdown_callback(name: str, *, notifier: BaseNotifier, **kwargs):
-    notifier.notify_job_finished(name)
+    notifier.notify_task_finished(name)
