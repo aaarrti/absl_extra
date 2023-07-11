@@ -33,13 +33,13 @@ class NoOpNotifier(BaseNotifier):
 
 class LoggingNotifier(BaseNotifier):
     def notify_task_started(self, name: str):
-        logging.info(f"Job {name} started.")
+        logging.info(f"Task {name} started.")
 
     def notify_task_finished(self, name: str):
-        logging.info(f"Job {name} finished.")
+        logging.info(f"Task {name} finished.")
 
     def notify_task_failed(self, name: str, exception: Exception):
-        logging.error(f"Job {name} failed with {exception}")
+        logging.error(f"Task {name} failed with {exception}")
 
 
 if util.find_spec("slack_sdk"):
@@ -59,11 +59,11 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f" :ballot_box_with_check: Job {name} started.",
+                            "text": f" :ballot_box_with_check: Task {name} started.",
                         },
                     }
                 ],
-                text="Job Started!",
+                text="Task Started!",
             )
 
         def notify_task_finished(self, name: str):
@@ -75,11 +75,11 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":white_check_mark: Job {name} finished execution.",
+                            "text": f":white_check_mark: Task {name} finished execution.",
                         },
                     }
                 ],
-                text="Job Finished!",
+                text="Task Finished!",
             )
 
         def notify_task_failed(self, name: str, exception: Exception):
@@ -91,11 +91,11 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":x: Job {name} failed, reason:\n ```{exception}```",
+                            "text": f":x: Task {name} failed, reason:\n ```{exception}```",
                         },
                     }
                 ],
-                text="Job Failed!",
+                text="Task Failed!",
             )
 
 else:

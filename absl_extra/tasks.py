@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import functools
-import json
-from functools import wraps
 from importlib import util
 from typing import (
     Callable,
@@ -11,8 +9,6 @@ from typing import (
     NamedTuple,
     TypeVar,
     Protocol,
-    ParamSpecArgs,
-    ParamSpecKwargs,
     TYPE_CHECKING,
     Dict,
 )
@@ -23,9 +19,7 @@ from absl_extra.notifier import BaseNotifier, LoggingNotifier
 
 T = TypeVar("T", bound=Callable)
 FLAGS = flags.FLAGS
-flags.DEFINE_string(
-    "task", default=None, required=True, help="Name of the function to execute."
-)
+flags.DEFINE_string("task", default="main", help="Name of the function to execute.")
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
@@ -43,7 +37,7 @@ else:
 
 
 if TYPE_CHECKING:
-    from absl_extra.src.callbacks import CallbackFn
+    from absl_extra.callbacks import CallbackFn
 
 
 class MongoConfig(NamedTuple):
@@ -61,23 +55,23 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
         self.notifier.notify_task_failed(self.name, exception)
 
 
-class TaskFn(Protocol):
-    def __call__(self, config: ConfigDict = None, db: Collection = None) -> None:
+class _TaskFn(Protocol):
+    def __call__(self, *, config: ConfigDict = None, db: Collection = None) -> None:
         ...
 
 
-TASK_STORE: Dict[str, Callable[[], None]] = dict()
+_TASK_STORE: Dict[str, Callable[[], None]] = dict()
 
 
 class NonExistentTaskError(RuntimeError):
     def __init__(self, task: str):
         super().__init__(
-            f"Unknown task {task}, registered are {list(TASK_STORE.keys())}"
+            f"Unknown task {task}, registered are {list(_TASK_STORE.keys())}"
         )
 
 
-def make_task_func(
-    func: Callable[[], None],
+def _make_task_func(
+    func: _TaskFn,
     *,
     name: str,
     notifier: BaseNotifier | Callable[[], BaseNotifier],
@@ -86,10 +80,7 @@ def make_task_func(
     post_callbacks: List[CallbackFn],
     db: Collection | None,
 ) -> None:
-    if isinstance(name, Callable):
-        _name = name()
-    else:
-        _name = name
+    _name = name
 
     @functools.wraps(func)
     def wrapper():
@@ -107,7 +98,7 @@ def make_task_func(
         for hook in init_callbacks:
             hook(_name, notifier=notifier, config=config, db=db)
 
-        func()
+        func(**kwargs)
 
         for hook in post_callbacks:
             hook(_name, notifier=notifier, config=config, db=db)
@@ -116,24 +107,23 @@ def make_task_func(
 
 
 def register_task(
-    name: str,
+    name: str = "main",
     notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
     config_file: str | None = None,
     mongo_config: MongoConfig | Mapping[str, ...] | None = None,
     init_callbacks: List[CallbackFn] = None,
     post_callbacks: List[CallbackFn] = None,
-) -> Callable[[TaskFn], None]:
+) -> Callable[[_TaskFn], None]:
     """
 
     Parameters
     ----------
-    fn:
-        Function to execute.
-    name:
-        Name to be used for lifecycle reporting.
-    init_callbacks:
-        List of callback, which must be called on initialization.
-        By default, will print parsed absl.flags and ml_collection.ConfigDict to stdout.
+    name: name passed to --task=
+    notifier
+    config_file
+    mongo_config
+    init_callbacks
+    post_callbacks
 
     Returns
     -------
@@ -169,9 +159,9 @@ def register_task(
 
     app.install_exception_handler(_ExceptionHandlerImpl(name, notifier))
 
-    def decorator(func: TaskFn) -> None:
-        TASK_STORE[name] = functools.partial(
-            make_task_func,
+    def decorator(func: _TaskFn) -> None:
+        _TASK_STORE[name] = functools.partial(
+            _make_task_func,
             name=name,
             notifier=notifier,
             init_callbacks=init_callbacks,
@@ -183,13 +173,13 @@ def register_task(
     return decorator
 
 
-def select_main(_):
+def _select_main(_):
     task_name = FLAGS.task
-    if task_name not in TASK_STORE:
+    if task_name not in _TASK_STORE:
         raise NonExistentTaskError(task_name)
-    func = TASK_STORE[task_name]
+    func = _TASK_STORE[task_name]
     func()
 
 
 def run():
-    app.run(select_main)
+    app.run(_select_main)

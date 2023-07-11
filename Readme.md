@@ -18,27 +18,25 @@ from ml_collections import ConfigDict
 from absl import logging
 import tensorflow as tf
 
-from absl_extra import MongoConfig, register_task, run
-from absl_extra.notifier import SlackNotifier
-from absl_extra.tf_utils import requires_gpu, supports_mixed_precision, make_gpu_strategy
+from absl_extra import tf_utils, tasks, notifier
 
 
-@register_task
-@requires_gpu
-def main(cmd: str, config: ConfigDict, db: Collection) -> None:
-    if supports_mixed_precision():
+@tasks.register_task(
+    config_file="config.py",
+    mongo_config=dict(uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"),
+    notifier=notifier.SlackNotifier(slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"])
+)
+@tf_utils.requires_gpu
+def main(config: ConfigDict, db: Collection) -> None:
+    if tf_utils.supports_mixed_precision():
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
     
-    with make_gpu_strategy().scope():
-        logging.info("Doing some heavy lifting...")    
+    with tf_utils.make_gpu_strategy().scope():
+        logging.info("Doing some heavy lifting...")
 
 
 if __name__ == "__main__":
-    run(
-        config_file="config.py",
-        mongo_config=MongoConfig(uri=os.environ["MONGO_URI"], db_name="my_project", collection="experiment_1"),
-        notifier=SlackNotifier(slack_token=os.environ["SLACK_BOT_TOKEN"], channel_id=os.environ["CHANNEL_ID"]),
-    )
+    tasks.run()
 ```
 
 
