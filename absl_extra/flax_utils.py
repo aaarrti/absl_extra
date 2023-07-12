@@ -11,7 +11,6 @@ from typing import (
     Type,
     TypeVar,
     no_type_check,
-    type_check_only,
 )
 
 import clu.metrics
@@ -39,7 +38,6 @@ class NanSafeAverage(clu.metrics.Average):
         return super().compute()
 
 
-@type_check_only
 class ApplyFn(Protocol[T]):
     def __call__(
         self,
@@ -52,7 +50,6 @@ class ApplyFn(Protocol[T]):
         ...
 
 
-@type_check_only
 class TrainingHook(Protocol[TS, M]):
     def __call__(
         self,
@@ -65,7 +62,6 @@ class TrainingHook(Protocol[TS, M]):
         ...
 
 
-@type_check_only
 class ValidationHook(Protocol[M]):
     def __call__(
         self,
@@ -236,11 +232,11 @@ def train_on_single_device(
         for val_hook in validation_hooks:
             val_hook(training_state.step, validation_metrics=validation_metrics)
 
-            if isinstance(hook, early_stopping.EarlyStopping):
-                if hook.should_stop:
+            if isinstance(val_hook, early_stopping.EarlyStopping):
+                if val_hook.should_stop:
                     break
 
     return (
-        training_metrics.compute(),
-        validation_metrics.compute(),
+        training_metrics.compute(),  # noqa
+        validation_metrics.compute(),  # noqa
     ), training_state.params

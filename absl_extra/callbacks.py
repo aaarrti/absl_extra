@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from importlib import util
-from typing import TYPE_CHECKING, Protocol, type_check_only
+from typing import TYPE_CHECKING, Protocol
 
 from absl import flags, logging
 
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from absl_extra.notifier import BaseNotifier
 
 
-@type_check_only
 class CallbackFn(Protocol):
     def __call__(
         self,
@@ -42,11 +41,13 @@ def log_absl_flags_callback(*args, **kwargs):
 
 def log_tensorflow_devices(*args, **kwargs):
     import tensorflow as tf
+
     logging.info(f"TF devices = {tf.config.list_physical_devices()}")
 
 
 def log_jax_devices(*args, **kwargs):
     import jax
+
     logging.info(f"JAX devices = {jax.devices()}")
 
 
