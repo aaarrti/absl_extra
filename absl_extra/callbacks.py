@@ -40,6 +40,16 @@ def log_absl_flags_callback(*args, **kwargs):
     logging.info(f"ABSL flags: {json.dumps(flags_dict, sort_keys=True, indent=4)}")
 
 
+def log_tensorflow_devices(*args, **kwargs):
+    import tensorflow as tf
+    logging.info(f"TF devices = {tf.config.list_physical_devices()}")
+
+
+def log_jax_devices(*args, **kwargs):
+    import jax
+    logging.info(f"JAX devices = {jax.devices()}")
+
+
 def log_startup_callback(name: str, *, notifier: BaseNotifier, **kwargs):
     notifier.notify_task_started(name)
 
