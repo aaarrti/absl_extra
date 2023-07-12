@@ -56,11 +56,11 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
 
 
 class _TaskFn(Protocol):
-    def __call__(self, *, config: ConfigDict = None, db: Collection = None) -> None:
+    def __call__(self, *, config: ConfigDict = None, db: Collection = None, **kwargs) -> None:
         ...
 
 
-_TASK_STORE: Dict[str, Callable[[], None]] = dict()  # type: ignore
+_TASK_STORE: Dict[str, Callable[[...], None]] = dict()  # type: ignore
 
 
 class NonExistentTaskError(RuntimeError):
@@ -133,6 +133,8 @@ def register_task(
         log_absl_flags_callback,
         log_shutdown_callback,
         log_startup_callback,
+        log_jax_devices,
+        log_tensorflow_devices
     )
 
     if isinstance(notifier, Callable):  # type: ignore
@@ -153,12 +155,16 @@ def register_task(
 
     if init_callbacks is None:
         init_callbacks = [log_absl_flags_callback, log_startup_callback]
+        if util.find_spec("tensorflow"):
+            init_callbacks.append(log_tensorflow_devices)
+        if util.find_spec("jax"):
+            init_callbacks.append(log_jax_devices)
 
     if post_callbacks is None:
         post_callbacks = [log_shutdown_callback]
 
     def decorator(func: _TaskFn) -> None:
-        _TASK_STORE[name] = functools.partial(
+        _TASK_STORE[name] = functools.partial(  # type: ignore
             _make_task_func,
             name=name,
             notifier=notifier,
@@ -172,6 +178,18 @@ def register_task(
 
 
 def run(argv: List[str] | None = None, **kwargs):
+    """
+    Parameters
+    ----------
+    argv:
+        CLI args passed to absl.app.run
+    kwargs:
+        Kwargs passed to entrypoint function.
+
+    Returns
+    -------
+
+    """
     def select_main(_):
         task_name = FLAGS.task
         if task_name not in _TASK_STORE:
