@@ -33,12 +33,15 @@ class NoOpNotifier(BaseNotifier):
 
 class LoggingNotifier(BaseNotifier):
     def notify_task_started(self, name: str):
+        logging.info("-" * 50)
         logging.info(f"Task {name} started.")
 
     def notify_task_finished(self, name: str):
+        logging.info("-" * 50)
         logging.info(f"Task {name} finished.")
 
     def notify_task_failed(self, name: str, exception: Exception):
+        logging.info("-" * 50)
         logging.error(f"Task {name} failed with {exception}")
 
 

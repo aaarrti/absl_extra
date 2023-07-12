@@ -14,13 +14,14 @@ classifiers = [
     "Development Status :: 3 - Alpha",
 ]
 dependencies = [
-    "absl_py"
+    "absl_py",
+    "toolz",
+    "typing_extensions; python_version < '3.10'"
 ]
 [project.optional-dependencies]
 dev = [
     "black",
-    "pytest",
-    "absl_extra[mongo,ml_collections,slack,tensorflow]"
+    "absl_extra[mongo,ml_collections,slack,tensorflow,jax]"
 ]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]

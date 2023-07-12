@@ -4,16 +4,24 @@ import functools
 import logging
 import platform
 from contextlib import contextmanager
+import sys
 from typing import Callable, ContextManager, Protocol, Type, TypeVar
+
+import toolz
+
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec
+else:
+    from typing_extensions import ParamSpec
 
 import tensorflow as tf
 
-T = TypeVar("T", bound=Callable)
+T = TypeVar("T")
+P = ParamSpec("P")
 
 
-def requires_gpu(
-    func: T | None = None, linux_only: bool = False
-) -> T | Callable[[T], T]:
+@toolz.curry
+def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, T]:
     """
     Fail if function is executing on host without access to GPU(s).
     Useful for early detecting container runtime misconfigurations.
@@ -34,24 +42,21 @@ def requires_gpu(
 
     """
 
-    def decorator(func2: T) -> T:
-        @functools.wraps(func2)
-        def wrapper(*args, **kwargs) -> T:
-            if linux_only and platform.system() != "linux":
-                logging.info(
-                    "Not running on linux, and linux_only==True, ignoring GPU strategy check."
-                )
-                return func2(*args, **kwargs)
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        if linux_only and platform.system() != "linux":
+            logging.info(
+                "Not running on linux, and linux_only==True, ignoring GPU strategy check."
+            )
+            return func(*args, **kwargs)
 
-            gpus = tf.config.list_physical_devices("GPU")
-            logging.info(f"Available GPUs -> {gpus}")
-            if len(gpus) == 0:
-                raise RuntimeError("No GPU available.")
-            return func2(*args, **kwargs)
+        gpus = tf.config.list_physical_devices("GPU")
+        logging.info(f"Available GPUs -> {gpus}")
+        if len(gpus) == 0:
+            raise RuntimeError("No GPU available.")
+        return func(*args, **kwargs)
 
-        return wrapper
-
-    return decorator(func) if func is not None else decorator
+    return wrapper
 
 
 class StrategyLike(Protocol):
@@ -64,7 +69,7 @@ class NoOpStrategy:
         pass
 
     @contextmanager
-    def scope(self) -> ContextManager:
+    def scope(self):
         yield
 
 

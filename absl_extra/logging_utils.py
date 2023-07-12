@@ -4,36 +4,40 @@ import functools
 import inspect
 from importlib import util
 from typing import Callable, Literal, TypeVar
-
+import sys
 from absl import logging
+import toolz
 
-T = TypeVar("T", bound=Callable)
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec
+else:
+    from typing_extensions import ParamSpec
 
 
+T = TypeVar("T")
+P = ParamSpec("P")
+
+
+@toolz.curry
 def log_exception(
-    func: T | None = None, logger: Callable[[str], None] = logging.error
-) -> T | Callable[[T], T]:
+    func: Callable[P, T], logger: Callable[[str], None] = logging.error
+) -> Callable[P, T]:
     """Log raised exception, and argument which caused it."""
 
-    def decorator(func2: T) -> T:
-        @functools.wraps(func2)
-        def wrapper(*args, **kwargs):
-            func_args = inspect.signature(func2).bind(*args, **kwargs).arguments
-            func_args_str = ", ".join(
-                map("{0[0]} = {0[1]!r}".format, func_args.items())
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        func_args = inspect.signature(func).bind(*args, **kwargs).arguments
+        func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
+
+        try:
+            return func(*args, **kwargs)
+        except Exception as ex:
+            logger(
+                f"{func.__module__}.{func.__qualname__} with args ( {func_args_str} ) raised {ex}"
             )
+            raise ex
 
-            try:
-                return func2(*args, **kwargs)
-            except Exception as ex:
-                logger(
-                    f"{func2.__module__}.{func2.__qualname__} with args ( {func_args_str} ) raised {ex}"
-                )
-                raise ex
-
-        return wrapper
-
-    return decorator(func) if func is not None else decorator
+    return wrapper
 
 
 def setup_logging(

@@ -11,6 +11,7 @@ from typing import (
     Protocol,
     TYPE_CHECKING,
     Dict,
+    Any,
 )
 
 from absl import app, flags, logging
@@ -25,7 +26,7 @@ if util.find_spec("pymongo"):
     from pymongo import MongoClient
     from pymongo.collection import Collection
 else:
-    Collection = None
+    Collection = type(None)
     logging.warning("pymongo not installed.")
 
 if util.find_spec("ml_collections"):
@@ -60,7 +61,7 @@ class _TaskFn(Protocol):
         ...
 
 
-_TASK_STORE: Dict[str, Callable[[], None]] = dict()
+_TASK_STORE: Dict[str, Callable[[], None]] = dict()  # type: ignore
 
 
 class NonExistentTaskError(RuntimeError):
@@ -79,13 +80,12 @@ def _make_task_func(
     init_callbacks: List[CallbackFn],
     post_callbacks: List[CallbackFn],
     db: Collection | None,
-) -> None:
+) -> _TaskFn:
     _name = name
 
     @functools.wraps(func)
-    def wrapper():
-        kwargs = {}
-
+    def wrapper(*args, **kwargs):
+        app.install_exception_handler(_ExceptionHandlerImpl(name, notifier))  # type: ignore
         if util.find_spec("ml_collections") and config_file is not None:
             config = config_flags.DEFINE_config_file("config", default=config_file)
             config = config.value
@@ -98,7 +98,7 @@ def _make_task_func(
         for hook in init_callbacks:
             hook(_name, notifier=notifier, config=config, db=db)
 
-        func(**kwargs)
+        func(*args, **kwargs)
 
         for hook in post_callbacks:
             hook(_name, notifier=notifier, config=config, db=db)
@@ -107,12 +107,13 @@ def _make_task_func(
 
 
 def register_task(
+    *,
     name: str = "main",
     notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
     config_file: str | None = None,
-    mongo_config: MongoConfig | Mapping[str, ...] | None = None,
-    init_callbacks: List[CallbackFn] = None,
-    post_callbacks: List[CallbackFn] = None,
+    mongo_config: MongoConfig | Mapping[str, Any] | None = None,
+    init_callbacks: List[CallbackFn] | None = None,
+    post_callbacks: List[CallbackFn] | None = None,
 ) -> Callable[[_TaskFn], None]:
     """
 
@@ -130,20 +131,20 @@ def register_task(
 
     """
     from absl_extra.callbacks import (
-        log_params_callback,
+        log_absl_flags_callback,
         log_startup_callback,
         log_shutdown_callback,
     )
 
-    if isinstance(notifier, Callable):
-        notifier = notifier()
+    if isinstance(notifier, Callable):  # type: ignore
+        notifier = notifier()  # type: ignore
     if notifier is None:
         notifier = LoggingNotifier()
 
     if util.find_spec("pymongo") and mongo_config is not None:
         if isinstance(mongo_config, Mapping):
             mongo_config = MongoConfig(**mongo_config)
-        db = (
+        db: Collection[Mapping[str, ...]] = (
             MongoClient(mongo_config.uri)
             .get_database(mongo_config.db_name)
             .get_collection(mongo_config.collection)
@@ -152,12 +153,10 @@ def register_task(
         db = None
 
     if init_callbacks is None:
-        init_callbacks = [log_params_callback, log_startup_callback]
+        init_callbacks = [log_absl_flags_callback, log_startup_callback]
 
     if post_callbacks is None:
         post_callbacks = [log_shutdown_callback]
-
-    app.install_exception_handler(_ExceptionHandlerImpl(name, notifier))
 
     def decorator(func: _TaskFn) -> None:
         _TASK_STORE[name] = functools.partial(
@@ -173,13 +172,12 @@ def register_task(
     return decorator
 
 
-def _select_main(_):
-    task_name = FLAGS.task
-    if task_name not in _TASK_STORE:
-        raise NonExistentTaskError(task_name)
-    func = _TASK_STORE[task_name]
-    func()
+def run(argv: List[str] | None = None, **kwargs):
+    def select_main(_):
+        task_name = FLAGS.task
+        if task_name not in _TASK_STORE:
+            raise NonExistentTaskError(task_name)
+        func = _TASK_STORE[task_name]
+        func(**kwargs)
 
-
-def run():
-    app.run(_select_main)
+    app.run(select_main, argv=argv)

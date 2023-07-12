@@ -8,6 +8,7 @@ It will:
 - Log parsed CLI flags from `absl.flags.FLAGS` and config values from `config_file:get_config()`
 - Inject `ml_collections.ConfigDict` from `config_file`, if kwarg provided.
 - Inject `pymongo.collection.Collection` if `mongo_config` kwarg provided.
+- Select registered task to run based on --task= CLI argument.
 
 Minimal example
 

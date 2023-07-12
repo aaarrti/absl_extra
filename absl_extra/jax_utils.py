@@ -2,17 +2,26 @@ from __future__ import annotations
 
 import functools
 import logging
+import collections
+import itertools
 import platform
-from typing import Callable, TypeVar
-
+from typing import Callable, TypeVar, Generator, Iterable, Deque
+import sys
 import jax
+import toolz
 
-T = TypeVar("T", bound=Callable)
+
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec
+else:
+    from typing_extensions import ParamSpec
+
+T = TypeVar("T")
+P = ParamSpec("P")
 
 
-def requires_gpu(
-    func: T | None = None, linux_only: bool = False
-) -> T | Callable[[T], T]:
+@toolz.curry
+def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, T]:
     """
     Fail if function is executing on host without access to GPU(s).
     Useful for early detecting container runtime misconfigurations.
@@ -33,21 +42,46 @@ def requires_gpu(
 
     """
 
-    def decorator(func2: T):
-        @functools.wraps(func2)
-        def wrapper(*args, **kwargs) -> T:
-            if linux_only and platform.system() != "linux":
-                logging.info(
-                    "Not running on linux, and linux_only==True, ignoring GPU strategy check."
-                )
-                return func2(*args, **kwargs)
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        if linux_only and platform.system() != "linux":
+            logging.info(
+                "Not running on linux, and linux_only==True, ignoring GPU strategy check."
+            )
+            return func(*args, **kwargs)
 
-            devices = jax.devices()
-            logging.info(f"JAX devices -> {devices}")
-            if devices[0].device_kind != "gpu":
-                raise RuntimeError("No GPU available.")
-            return func2(*args, **kwargs)
+        devices = jax.devices()
+        logging.info(f"JAX devices -> {devices}")
+        if devices[0].device_kind != "gpu":
+            raise RuntimeError("No GPU available.")
+        return func(*args, **kwargs)
 
-        return wrapper
+    return wrapper
 
-    return decorator(func) if func is not None else decorator
+
+def prefetch_to_device(
+    iterator: Iterable[T], size: int = 2
+) -> Generator[T, None, None]:
+    queue: Deque[T] = collections.deque()
+    devices = jax.devices()
+    if devices[0].device_kind != "gpu":
+        logging.error("Prefetch must be used only with GPU")
+        for i in iterator:
+            yield i
+
+    if len(devices) > 1:
+        raise ValueError(
+            "Prefetch must be used only with single GPU, for multi-GPU support us flax.jax_utils.prefetch_to_device."
+        )
+
+    def enqueue(n: int) -> None:
+        """Enqueues *up to* `n` elements from the iterator."""
+        for data in itertools.islice(iterator, n):
+            queue.append(
+                jax.tree_util.tree_map(lambda xs: jax.device_put(xs, devices[0]), data)
+            )
+
+    enqueue(size)  # Fill up the buffer.
+    while queue:
+        yield queue.popleft()
+        enqueue(1)
