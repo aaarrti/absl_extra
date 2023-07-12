@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Protocol, TYPE_CHECKING, type_check_only
-from importlib import util
-from absl import logging, flags
 import json
+from importlib import util
+from typing import TYPE_CHECKING, Protocol, type_check_only
+
+from absl import flags, logging
 
 if util.find_spec("ml_collections"):
     from ml_collections import ConfigDict

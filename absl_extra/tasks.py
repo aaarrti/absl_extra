@@ -3,15 +3,15 @@ from __future__ import annotations
 import functools
 from importlib import util
 from typing import (
+    TYPE_CHECKING,
+    Any,
     Callable,
+    Dict,
     List,
     Mapping,
     NamedTuple,
-    TypeVar,
     Protocol,
-    TYPE_CHECKING,
-    Dict,
-    Any,
+    TypeVar,
 )
 
 from absl import app, flags, logging
@@ -30,8 +30,7 @@ else:
     logging.warning("pymongo not installed.")
 
 if util.find_spec("ml_collections"):
-    from ml_collections import ConfigDict
-    from ml_collections import config_flags
+    from ml_collections import ConfigDict, config_flags
 else:
     logging.warning("ml_collections not installed")
     ConfigDict = None
@@ -132,8 +131,8 @@ def register_task(
     """
     from absl_extra.callbacks import (
         log_absl_flags_callback,
-        log_startup_callback,
         log_shutdown_callback,
+        log_startup_callback,
     )
 
     if isinstance(notifier, Callable):  # type: ignore

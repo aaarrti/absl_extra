@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import functools
 import inspect
+import sys
 from importlib import util
 from typing import Callable, Literal, TypeVar
-import sys
-from absl import logging
+
 import toolz
+from absl import logging
 
 if sys.version_info >= (3, 10):
     from typing import ParamSpec

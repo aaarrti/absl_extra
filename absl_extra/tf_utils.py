@@ -3,8 +3,8 @@ from __future__ import annotations
 import functools
 import logging
 import platform
-from contextlib import contextmanager
 import sys
+from contextlib import contextmanager
 from typing import Callable, ContextManager, Protocol, Type, TypeVar
 
 import toolz

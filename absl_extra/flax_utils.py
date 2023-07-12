@@ -1,27 +1,28 @@
 from __future__ import annotations
 
 from typing import (
-    Protocol,
-    TypeVar,
     Callable,
-    Iterable,
-    Tuple,
-    List,
     Dict,
-    Type,
+    Iterable,
+    List,
+    Protocol,
     Sized,
-    type_check_only,
+    Tuple,
+    Type,
+    TypeVar,
     no_type_check,
+    type_check_only,
 )
-from jaxtyping import Array, Int, Key, Float, jaxtyped
-import clu.periodic_actions
+
 import clu.metrics
-from flax.core import frozen_dict
+import clu.periodic_actions
+from absl import logging
 from flax import struct
-from flax.training import train_state, early_stopping
+from flax.core import frozen_dict
+from flax.training import early_stopping, train_state
+from jaxtyping import Array, Float, Int, Key, jaxtyped
 from keras.utils.generic_utils import Progbar
 
-from absl import logging
 from absl_extra.jax_utils import prefetch_to_device
 
 T = TypeVar("T", contravariant=True)

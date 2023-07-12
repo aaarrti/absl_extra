@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import functools
-import logging
 import collections
+import functools
 import itertools
+import logging
 import platform
-from typing import Callable, TypeVar, Generator, Iterable, Deque
 import sys
+from typing import Callable, Deque, Generator, Iterable, TypeVar
+
 import jax
 import toolz
-
 
 if sys.version_info >= (3, 10):
     from typing import ParamSpec
