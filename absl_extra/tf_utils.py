@@ -44,7 +44,7 @@ def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, 
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        if linux_only and platform.system() != "linux":
+        if linux_only and platform.system().lower() != "linux":
             logging.info(
                 "Not running on linux, and linux_only==True, ignoring GPU strategy check."
             )
