@@ -56,7 +56,9 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
 
 
 class _TaskFn(Protocol):
-    def __call__(self, *, config: ConfigDict = None, db: Collection = None, **kwargs) -> None:
+    def __call__(
+        self, *, config: ConfigDict = None, db: Collection = None, **kwargs
+    ) -> None:
         ...
 
 
@@ -115,26 +117,32 @@ def register_task(
     post_callbacks: List[CallbackFn] | None = None,
 ) -> Callable[[_TaskFn], None]:
     """
-
     Parameters
     ----------
-    name: name passed to --task=
-    notifier
-    config_file
-    mongo_config
-    init_callbacks
-    post_callbacks
+    name : str, optional
+        The name of the task. Default is "main".
+    notifier : BaseNotifier | Callable[[], BaseNotifier] | None, optional
+        The notifier object or callable that returns a notifier object. Default is None.
+    config_file : str | None, optional
+        The path to the configuration file. Default is None.
+    mongo_config : MongoConfig | Mapping[str, Any] | None, optional
+        The configuration object for MongoDB or a mapping of configuration values. Default is None.
+    init_callbacks : List[CallbackFn] | None, optional
+        The list of callback functions to be executed during task initialization. Default is None.
+    post_callbacks : List[CallbackFn] | None, optional
+        The list of callback functions to be executed after the task completes. Default is None.
 
     Returns
     -------
-
+    Callable[[_TaskFn], None]
+        The decorator function that registers the task.
     """
     from absl_extra.callbacks import (
         log_absl_flags_callback,
         log_shutdown_callback,
         log_startup_callback,
         log_jax_devices,
-        log_tensorflow_devices
+        log_tensorflow_devices,
     )
 
     if isinstance(notifier, Callable):  # type: ignore
@@ -190,6 +198,7 @@ def run(argv: List[str] | None = None, **kwargs):
     -------
 
     """
+
     def select_main(_):
         task_name = FLAGS.task
         if task_name not in _TASK_STORE:

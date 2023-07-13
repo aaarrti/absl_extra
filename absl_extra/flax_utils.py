@@ -106,6 +106,19 @@ class UncheckedPeriodicCallback(clu.periodic_actions.PeriodicCallback):
 def save_as_msgpack(
     params: frozen_dict.FrozenDict, save_path: str = "model.msgpack"
 ) -> None:
+    """
+    Parameters
+    ----------
+    params : frozen_dict.FrozenDict
+        The frozen dictionary object that contains the parameters to be saved.
+    save_path : str, optional
+        The file path where the msgpack file will be saved. Default is "model.msgpack".
+
+    Returns
+    -------
+    None
+        This method does not return any value.
+    """
     logging.info(f"Writing {save_path}")
     msgpack_bytes: bytes = frozen_dict.serialization.to_bytes(params)
     with open(save_path, "wb+") as file:
@@ -115,6 +128,23 @@ def save_as_msgpack(
 def load_from_msgpack(
     params: frozen_dict.FrozenDict, save_path: str = "model.msgpack"
 ) -> frozen_dict.FrozenDict:
+    """
+    Load model parameters from a msgpack file.
+
+    Parameters
+    ----------
+    params : frozen_dict.FrozenDict
+        The original parameters of the model.
+    save_path : str, optional
+        The path to the msgpack file containing the serialized parameters.
+        Default is "model.msgpack".
+
+    Returns
+    -------
+    params : frozen_dict.FrozenDict
+        The loaded parameters.
+
+    """
     logging.info(f"Reading {save_path}")
 
     with open(save_path, "rb") as file:
@@ -153,6 +183,42 @@ def train_on_single_device(
     verbose: bool = False,
     num_training_steps: int | None = None,
 ) -> Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]:
+    """
+    Parameters
+    ----------
+    training_state : TS
+        The initial state of the training process.
+    training_dataset_factory : DatasetFactory
+        A factory function that returns the training dataset.
+    validation_dataset_factory : DatasetFactory
+        A factory function that returns the validation dataset.
+    metrics_container_type : Type[M]
+        The type of container to store the metrics.
+    training_step_func : Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
+        A function that performs a single training step. It takes the training state, input data, and target data as inputs,
+        and returns the updated training state and metrics.
+    validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
+        A function that performs a single validation step. It takes the training state, input data, and target data as inputs,
+        and returns the metrics.
+    training_hooks : List[TrainingHook[TS, M]] | None, optional
+        A list of training hooks to be executed after each training step. Defaults to None.
+    validation_hooks : List[ValidationHook[M]] | None, optional
+        A list of validation hooks to be executed after each validation step. Defaults to None.
+    epochs : int, optional
+        The number of training epochs. Defaults to 1.
+    prefetch_buffer_size : int, optional
+        The size of the prefetch buffer for loading data. Defaults to 2.
+    verbose : bool, optional
+        Whether to display verbose output during training. Defaults to False.
+    num_training_steps : int | None, optional
+        The total number of training steps. If None, it is calculated based on the size of the training dataset.
+        Defaults to None.
+
+    Returns
+    -------
+    Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
+        A tuple containing the training and validation metrics, and the final training state parameters.
+    """
     if epochs <= 0:
         raise InvalidEpochsNumberError(epochs)
 
