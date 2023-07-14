@@ -6,7 +6,6 @@ from typing import (
     Iterable,
     List,
     Protocol,
-    Sized,
     Tuple,
     Type,
     TypeVar,
@@ -20,7 +19,6 @@ from flax import struct
 from flax.core import frozen_dict
 from flax.training import early_stopping, train_state
 from jaxtyping import Array, Float, Int, Key, jaxtyped
-from keras.utils.generic_utils import Progbar
 
 from absl_extra.jax_utils import prefetch_to_device
 
@@ -160,11 +158,6 @@ class InvalidEpochsNumberError(RuntimeError):
         super().__init__(f"Epochs must be greater than 0, but found {value}")
 
 
-class MissingSizeError(RuntimeError):
-    def __init__(self, size_key: str = "size"):
-        super().__init__(f"Must provide {size_key}, for not sized iterable.")
-
-
 @jaxtyped
 def train_on_single_device(
     *,
@@ -181,7 +174,6 @@ def train_on_single_device(
     epochs: int = 1,
     prefetch_buffer_size: int = 2,
     verbose: bool = False,
-    num_training_steps: int | None = None,
 ) -> Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]:
     """
     Parameters
@@ -227,14 +219,6 @@ def train_on_single_device(
     if validation_hooks is None:
         validation_hooks = []
 
-    if verbose:
-        if num_training_steps is None:
-            training_dataset = training_dataset_factory()
-            if isinstance(training_dataset, Sized):
-                num_training_steps = len(training_dataset)
-            else:
-                raise MissingSizeError("num_training_steps")
-
     for epoch in range(epochs):
         if verbose:
             logging.info(f"Epoch {epoch+1}/{epochs}...")
@@ -245,13 +229,7 @@ def train_on_single_device(
                 training_dataset, prefetch_buffer_size
             )
 
-        if verbose:
-            logging.debug(f"Training epoch {epoch+1}/{epochs}...")
-
         training_metrics = metrics_container_type.empty()
-
-        if verbose:
-            pbar = Progbar(num_training_steps)
 
         for x_batch, y_batch in training_dataset:
             training_state, metrics_i = training_step_func(
@@ -260,12 +238,9 @@ def train_on_single_device(
             training_metrics = training_metrics.merge(metrics_i)
 
             if verbose:
-                pbar.update(
-                    int(training_state.step),
-                    [
-                        (f"train_{k}", float(v))
-                        for k, v in training_metrics.compute().items()
-                    ],
+                logging.info(
+                    {f"train_{k}": f"{float(v):.3f}"}
+                    for k, v in training_metrics.compute().items()
                 )
 
             for hook in training_hooks:
@@ -287,12 +262,9 @@ def train_on_single_device(
             validation_metrics = validation_metrics.merge(metrics_i)
 
         if verbose:
-            pbar.update(
-                int(training_state.step),
-                [
-                    (f"val_{k}", float(v))
-                    for k, v in validation_metrics.compute().items()
-                ],
+            logging.info(
+                {f"val_{k}": f"{float(v):.3f}"}
+                for k, v in validation_metrics.compute().items()
             )
 
         for val_hook in validation_hooks:
