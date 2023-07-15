@@ -7,7 +7,9 @@ import logging
 import platform
 import sys
 from typing import Callable, Deque, Generator, Iterable, TypeVar
+from jaxtyping import jaxtyped, Int32, Float, Array
 
+import jax.numpy as jnp
 import jax
 import toolz
 
@@ -109,3 +111,49 @@ def prefetch_to_device(
     while queue:
         yield queue.popleft()
         enqueue(1)
+
+
+@jaxtyped
+@functools.partial(
+    jax.jit,
+    static_argnames=[
+        "apply_class_balancing",
+        "alpha",
+        "gamma",
+        "label_smoothing",
+        "axis",
+    ],
+)
+def binary_focal_crossentropy(
+    logits: Float[Array, "batch classes"],
+    labels: Int32[Array, "batch classes"],
+    *,
+    apply_class_balancing: bool = False,
+    alpha: float = 0.25,
+    gamma: float = 2.0,
+    label_smoothing: float = 0.0,
+    axis=-1,
+) -> Float[Array, "batch"]:
+    labels = jnp.asarray(labels, logits.dtype)
+    label_smoothing = jnp.asarray(label_smoothing, dtype=logits.dtype)
+
+    def _smooth_labels():
+        return labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
+
+    if apply_class_balancing:
+        labels = _smooth_labels()
+    else:
+        labels = labels
+
+    logits = jax.nn.sigmoid(logits)
+    epsilon = jnp.finfo(logits.dtype).eps
+    logits = jnp.clip(logits, epsilon, 1.0 - epsilon)
+
+    p_t = labels * logits + (1 - labels) * (1 - logits)
+    alpha_t = labels * alpha + (1 - labels) * (1 - alpha)
+    focal_weight = alpha_t * (1 - p_t) ** gamma
+
+    bce = -(labels * jnp.log(logits) + (1 - labels) * jnp.log(1 - logits))
+    focal_bce = focal_weight * bce
+
+    return jnp.mean(focal_bce, axis=axis)

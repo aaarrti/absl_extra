@@ -35,7 +35,6 @@ else:
     logging.warning("ml_collections not installed")
     ConfigDict = None
 
-
 if TYPE_CHECKING:
     from absl_extra.callbacks import CallbackFn
 
@@ -137,13 +136,7 @@ def register_task(
     Callable[[_TaskFn], None]
         The decorator function that registers the task.
     """
-    from absl_extra.callbacks import (
-        log_absl_flags_callback,
-        log_shutdown_callback,
-        log_startup_callback,
-        log_jax_devices,
-        log_tensorflow_devices,
-    )
+    from absl_extra.callbacks import DEFAULT_INIT_CALLBACKS, DEFAULT_POST_CALLBACK
 
     if isinstance(notifier, Callable):  # type: ignore
         notifier = notifier()  # type: ignore
@@ -162,14 +155,10 @@ def register_task(
         db = None
 
     if init_callbacks is None:
-        init_callbacks = [log_absl_flags_callback, log_startup_callback]
-        if util.find_spec("tensorflow"):
-            init_callbacks.append(log_tensorflow_devices)
-        if util.find_spec("jax"):
-            init_callbacks.append(log_jax_devices)
+        init_callbacks = DEFAULT_INIT_CALLBACKS
 
     if post_callbacks is None:
-        post_callbacks = [log_shutdown_callback]
+        post_callbacks = DEFAULT_POST_CALLBACK
 
     def decorator(func: _TaskFn) -> None:
         _TASK_STORE[name] = functools.partial(  # type: ignore

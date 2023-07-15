@@ -61,3 +61,17 @@ def log_startup_callback(name: str, *, notifier: BaseNotifier, **kwargs):
 def log_shutdown_callback(name: str, *, notifier: BaseNotifier, **kwargs):
     """Notify on task execution end."""
     notifier.notify_task_finished(name)
+
+
+DEFAULT_INIT_CALLBACKS = [
+    log_absl_flags_callback,
+    log_startup_callback,
+]
+DEFAULT_POST_CALLBACK = [
+    log_shutdown_callback,
+]
+
+if util.find_spec("tensorflow"):
+    DEFAULT_INIT_CALLBACKS.append(log_tensorflow_devices)
+if util.find_spec("jax"):
+    DEFAULT_INIT_CALLBACKS.append(log_jax_devices)

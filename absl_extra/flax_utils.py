@@ -12,13 +12,16 @@ from typing import (
     no_type_check,
 )
 
-import clu.metrics
 import clu.periodic_actions
+import jax
+import jax.numpy as jnp
 from absl import logging
+from clu.metrics import Metric
+from flax import jax_utils
 from flax import struct
 from flax.core import frozen_dict
 from flax.training import early_stopping, train_state
-from jaxtyping import Array, Float, Int, Key, jaxtyped
+from jaxtyping import Array, Float, Int, Key, jaxtyped, Int32
 
 from absl_extra.jax_utils import prefetch_to_device
 
@@ -31,9 +34,95 @@ DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  
 @struct.dataclass
 class NanSafeAverage(clu.metrics.Average):
     def compute(self) -> float:
-        if self.count == 0:
+        if self.count != 0:
+            return super().compute()
+        else:
             return 0
-        return super().compute()
+
+
+@struct.dataclass
+class F1Score(clu.metrics.Metric):
+    """
+    Class F1Score
+    This class represents the F1 Score metric for evaluating classification models.
+
+    - A model will obtain a high F1 score if both Precision and Recall are high.
+    - A model will obtain a low F1 score if both Precision and Recall are low.
+    - A model will obtain a medium F1 score if one of Precision and Recall is low and the other is high.
+    - Precision: Precision is a measure of how many of the positively classified examples were actually positive.
+    - Recall (also called Sensitivity or True Positive Rate): Recall is a measure of how many of the actual positive
+    examples were correctly labeled by the classifier.
+
+    """
+
+    true_positive: Float[Array, "1"]
+    false_positive: Float[Array, "1"]
+    false_negative: Float[Array, "1"]
+
+    @classmethod
+    def from_model_output(
+        cls,
+        *,
+        logits: Float[Array, "batch classes"],
+        labels: Int32[Array, "batch classes"],
+        threshold: float = 0.5,
+        **kwargs,
+    ) -> "F1Score":
+        predicted = jnp.asarray(logits >= threshold, labels.dtype)
+        true_positive = jnp.sum((predicted == 1) & (labels == 1))
+        false_positive = jnp.sum((predicted == 1) & (labels == 0))
+        false_negative = jnp.sum((predicted == 0) & (labels == 1))
+
+        return F1Score(
+            true_positive=true_positive,
+            false_positive=false_positive,
+            false_negative=false_negative,
+        )
+
+    def merge(self, other: "F1Score") -> "F1Score":
+        return F1Score(
+            true_positive=self.true_positive + other.true_positive,
+            false_positive=self.false_positive + other.false_positive,
+            false_negative=self.false_negative + other.false_negative,
+        )
+
+    @classmethod
+    def empty(cls) -> "F1Score":
+        return F1Score(
+            true_positive=0,
+            false_positive=0,
+            false_negative=0,
+        )
+
+    def compute(self) -> float:
+        precision = nan_div(
+            self.true_positive, self.true_positive + self.false_positive
+        )
+        recall = nan_div(self.true_positive, self.true_positive + self.false_negative)
+
+        # Ensure we don't divide by zero if both precision and recall are zero
+        if precision + recall == 0:
+            return 0.0
+
+        f1_score = 2 * (precision * recall) / (precision + recall)
+        return f1_score
+
+
+@struct.dataclass
+class BinaryAccuracy(NanSafeAverage):
+    @classmethod
+    def from_model_output(  # noqa
+        cls,
+        *,
+        logits: Float[Array, "batch classes"],
+        labels: Int32[Array, "batch classes"],
+        threshold: float = 0.5,
+        **kwargs,
+    ) -> "BinaryAccuracy":
+        predicted = jnp.asarray(logits >= threshold, logits.dtype)
+        return super().from_model_output(
+            values=jnp.asarray(predicted == labels, predicted.dtype)
+        )
 
 
 class ApplyFn(Protocol[T]):
@@ -159,15 +248,16 @@ class InvalidEpochsNumberError(RuntimeError):
 
 
 @jaxtyped
-def train_on_single_device(
+def fit(
     *,
     training_state: TS,
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     metrics_container_type: Type[M],
     # fmt: off
-    training_step_func: Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]], # noqa
-    validation_step_func: Callable[[TS, T, Int[Array, "batch classes"]], M], # noqa
+    training_step_func: Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]],  # noqa
+    validation_step_func: Callable[[TS, T, Int[Array, "batch classes"], M], M],
+    # noqa
     # fmt: on
     training_hooks: List[TrainingHook[TS, M]] | None = None,
     validation_hooks: List[ValidationHook[M]] | None = None,
@@ -202,9 +292,6 @@ def train_on_single_device(
         The size of the prefetch buffer for loading data. Defaults to 2.
     verbose : bool, optional
         Whether to display verbose output during training. Defaults to False.
-    num_training_steps : int | None, optional
-        The total number of training steps. If None, it is calculated based on the size of the training dataset.
-        Defaults to None.
 
     Returns
     -------
@@ -214,6 +301,11 @@ def train_on_single_device(
     if epochs <= 0:
         raise InvalidEpochsNumberError(epochs)
 
+    is_multi_device = len(jax.devices()) > 1
+
+    if is_multi_device:
+        training_state = jax_utils.replicate(training_state)
+
     if training_hooks is None:
         training_hooks = []
     if validation_hooks is None:
@@ -221,60 +313,88 @@ def train_on_single_device(
 
     for epoch in range(epochs):
         if verbose:
-            logging.info(f"Epoch {epoch+1}/{epochs}...")
+            logging.info(f"Epoch {epoch + 1}/{epochs}...")
 
         training_dataset = training_dataset_factory()
         if prefetch_buffer_size != 0:
-            training_dataset = prefetch_to_device(
-                training_dataset, prefetch_buffer_size
-            )
+            if is_multi_device:
+                training_dataset = jax_utils.prefetch_to_device(
+                    training_dataset, prefetch_buffer_size
+                )
+            else:
+                training_dataset = prefetch_to_device(
+                    training_dataset, prefetch_buffer_size
+                )
 
         training_metrics = metrics_container_type.empty()
 
-        for x_batch, y_batch in training_dataset:
-            training_state, metrics_i = training_step_func(
-                training_state, x_batch, y_batch
-            )
-            training_metrics = training_metrics.merge(metrics_i)
+        if is_multi_device:
+            training_metrics = jax_utils.replicate(training_metrics)
 
-            if verbose:
-                logging.info(
-                    {f"train_{k}": f"{float(v):.3f}"}
-                    for k, v in training_metrics.compute().items()
-                )
+        for x_batch, y_batch in training_dataset:
+            training_state, training_metrics = training_step_func(
+                training_state, x_batch, y_batch, training_metrics
+            )
 
             for hook in training_hooks:
                 hook(
-                    training_state.step,
+                    int(training_state.step),
                     training_state=training_state,
-                    training_metrics=training_metrics,
+                    training_metrics=training_metrics.unreplicate(),
                 )
+        if verbose:
+            logging.info(
+                {f"train_{k}": f"{float(v):.3f}"}
+                for k, v in training_metrics.unreplicate().compute().items()
+            )
 
         validation_dataset = validation_dataset_factory()
         if prefetch_buffer_size != 0:
-            validation_dataset = prefetch_to_device(
-                validation_dataset, prefetch_buffer_size
-            )
+            if is_multi_device:
+                validation_dataset = jax_utils.prefetch_to_device(
+                    validation_dataset, prefetch_buffer_size
+                )
+            else:
+                validation_dataset = prefetch_to_device(
+                    validation_dataset, prefetch_buffer_size
+                )
         validation_metrics = metrics_container_type.empty()
 
+        if is_multi_device:
+            validation_metrics = jax_utils.replicate(validation_metrics)
+
         for x_batch, y_batch in validation_dataset:
-            metrics_i = validation_step_func(training_state, x_batch, y_batch)
-            validation_metrics = validation_metrics.merge(metrics_i)
+            validation_metrics = validation_step_func(
+                training_state, x_batch, y_batch, validation_metrics
+            )
 
         if verbose:
             logging.info(
                 {f"val_{k}": f"{float(v):.3f}"}
-                for k, v in validation_metrics.compute().items()
+                for k, v in validation_metrics.unreplicate().compute().items()
             )
 
         for val_hook in validation_hooks:
-            val_hook(training_state.step, validation_metrics=validation_metrics)
+            val_hook(
+                int(training_state.step),
+                validation_metrics=validation_metrics.unreplicate(),
+            )
 
             if isinstance(val_hook, early_stopping.EarlyStopping):
                 if val_hook.should_stop:
                     break
 
+    if is_multi_device:
+        training_state = jax_utils.unreplicate(training_state)
+
     return (
-        training_metrics.compute(),  # noqa
-        validation_metrics.compute(),  # noqa
+        training_metrics.unreplicate().compute(),  # noqa
+        validation_metrics.unreplicate().compute(),  # noqa
     ), training_state.params
+
+
+def nan_div(a: float, b: float) -> float:
+    if b == 0:
+        return 0
+    else:
+        return a / b
