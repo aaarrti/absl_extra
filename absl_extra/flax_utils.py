@@ -305,7 +305,13 @@ def fit(
 
     if is_multi_device:
         training_state = jax_utils.replicate(training_state)
-
+    
+    def step_num():
+        step = training_state.step
+        if is_multi_device:
+            step = jax_utils.unreplicate(step)
+        return int(step)
+        
     if training_hooks is None:
         training_hooks = []
     if validation_hooks is None:
@@ -338,7 +344,7 @@ def fit(
 
             for hook in training_hooks:
                 hook(
-                    int(training_state.step),
+                    step_num(),
                     training_state=training_state,
                     training_metrics=training_metrics.unreplicate(),
                 )
@@ -376,7 +382,7 @@ def fit(
 
         for val_hook in validation_hooks:
             val_hook(
-                int(training_state.step),
+                step_num(),
                 validation_metrics=validation_metrics.unreplicate(),
             )
 
