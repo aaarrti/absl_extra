@@ -20,7 +20,7 @@ from clu.metrics import Metric
 from flax import jax_utils
 from flax import struct
 from flax.core import frozen_dict
-from flax.training import early_stopping, train_state
+from flax.training import early_stopping, train_state, common_utils
 from jaxtyping import Array, Float, Int, Key, jaxtyped, Int32
 
 from absl_extra.jax_utils import prefetch_to_device
@@ -305,6 +305,7 @@ def fit(
 
     if is_multi_device:
         training_state = jax_utils.replicate(training_state)
+        training_state.replace(dropout_key=common_utils.shard_prng_key(training_state.dropout_key))
     
     def step_num():
         step = training_state.step
@@ -338,6 +339,9 @@ def fit(
             training_metrics = jax_utils.replicate(training_metrics)
 
         for x_batch, y_batch in training_dataset:
+            if is_multi_device:
+                x_batch = common_utils.shard(x_batch)
+                y_batch = common_utils.shard(y_batch)
             training_state, training_metrics = training_step_func(
                 training_state, x_batch, y_batch, training_metrics
             )
@@ -370,6 +374,9 @@ def fit(
             validation_metrics = jax_utils.replicate(validation_metrics)
 
         for x_batch, y_batch in validation_dataset:
+            if is_multi_device:
+                x_batch = common_utils.shard(x_batch)
+                y_batch = common_utils.shard(y_batch)
             validation_metrics = validation_step_func(
                 training_state, x_batch, y_batch, validation_metrics
             )
