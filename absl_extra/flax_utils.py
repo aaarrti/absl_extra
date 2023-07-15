@@ -304,8 +304,9 @@ def fit(
     is_multi_device = len(jax.devices()) > 1
 
     if is_multi_device:
+        dropout_key = common_utils.shard_prng_key(training_state.dropout_key)
         training_state = jax_utils.replicate(training_state)
-        training_state.replace(dropout_key=common_utils.shard_prng_key(training_state.dropout_key))
+        training_state.replace(dropout_key=dropout_key)
     
     def step_num():
         step = training_state.step
@@ -339,9 +340,6 @@ def fit(
             training_metrics = jax_utils.replicate(training_metrics)
 
         for x_batch, y_batch in training_dataset:
-            if is_multi_device:
-                x_batch = common_utils.shard(x_batch)
-                y_batch = common_utils.shard(y_batch)
             training_state, training_metrics = training_step_func(
                 training_state, x_batch, y_batch, training_metrics
             )
@@ -374,9 +372,6 @@ def fit(
             validation_metrics = jax_utils.replicate(validation_metrics)
 
         for x_batch, y_batch in validation_dataset:
-            if is_multi_device:
-                x_batch = common_utils.shard(x_batch)
-                y_batch = common_utils.shard(y_batch)
             validation_metrics = validation_step_func(
                 training_state, x_batch, y_batch, validation_metrics
             )
