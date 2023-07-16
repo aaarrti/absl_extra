@@ -10,6 +10,8 @@ from typing import (
     Type,
     TypeVar,
     no_type_check,
+    NamedTuple,
+    Any,
 )
 
 import clu.periodic_actions
@@ -21,7 +23,7 @@ from flax import jax_utils
 from flax import struct
 from flax.core import frozen_dict
 from flax.training import early_stopping, train_state, common_utils
-from jaxtyping import Array, Float, Int, Key, jaxtyped, Int32
+from jaxtyping import Array, Float, Int, jaxtyped, Int32
 
 from absl_extra.jax_utils import prefetch_to_device
 
@@ -29,6 +31,11 @@ T = TypeVar("T", contravariant=True)
 TS = TypeVar("TS", bound=train_state.TrainState, contravariant=True)
 M = TypeVar("M", bound=clu.metrics.Collection, contravariant=True)
 DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  # noqa
+ValidationStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]
+TrainingStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]
+MetricsAndParams = Tuple[
+    Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict
+]
 
 
 @struct.dataclass
@@ -95,10 +102,10 @@ class F1Score(clu.metrics.Metric):
         )
 
     def compute(self) -> float:
-        precision = nan_div(
+        precision = _nan_div(
             self.true_positive, self.true_positive + self.false_positive
         )
-        recall = nan_div(self.true_positive, self.true_positive + self.false_negative)
+        recall = _nan_div(self.true_positive, self.true_positive + self.false_negative)
 
         # Ensure we don't divide by zero if both precision and recall are zero
         if precision + recall == 0:
@@ -125,39 +132,31 @@ class BinaryAccuracy(NanSafeAverage):
         )
 
 
-class ApplyFn(Protocol[T]):
-    def __call__(
-        self,
-        params: Dict[str, frozen_dict.FrozenDict],
-        x_batch: T,
-        train: bool = False,
-        rngs: Dict[str, Key] | None = None,
-        **kwargs,
-    ) -> Float[Array, "batch classes"]:  # noqa
+class OnStepBegin(Protocol[TS, M]):
+    def __call__(self, step: int) -> None:
         ...
 
 
-class TrainingHook(Protocol[TS, M]):
-    def __call__(
-        self,
-        step: int,
-        *,
-        training_state: TS,
-        training_metrics: M,
-        **kwargs,
-    ) -> None:
+class OnStepEnd(Protocol[TS, M]):
+    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> None:
         ...
 
 
-class ValidationHook(Protocol[M]):
-    def __call__(
-        self,
-        step: int,
-        *,
-        validation_metrics: M,
-        **kwargs,
-    ) -> None:
+class OnEpochBegin(Protocol[TS, M]):
+    def __call__(self, step: int) -> None:
         ...
+
+
+class OnEpochEnd(Protocol[TS, M]):
+    def __call__(self, step: int, *, validation_metrics: M, training_state: TS) -> None:
+        ...
+
+
+class TrainingHooks(NamedTuple):
+    on_epoch_begin: List[OnEpochBegin] = []
+    on_epoch_end: List[OnEpochEnd] = []
+    on_step_begin: List[OnStepBegin] = []
+    on_step_end: List[OnStepEnd] = []
 
 
 class UncheckedReportProgress(clu.periodic_actions.ReportProgress):
@@ -188,6 +187,11 @@ class UncheckedPeriodicCallback(clu.periodic_actions.PeriodicCallback):
             self._last_step = step
         else:
             self._last_step = step
+
+
+class InvalidEpochsNumberError(RuntimeError):
+    def __init__(self, value: int):
+        super().__init__(f"Epochs must be greater than 0, but found {value}")
 
 
 def save_as_msgpack(
@@ -242,11 +246,6 @@ def load_from_msgpack(
     return params
 
 
-class InvalidEpochsNumberError(RuntimeError):
-    def __init__(self, value: int):
-        super().__init__(f"Epochs must be greater than 0, but found {value}")
-
-
 @jaxtyped
 def fit(
     *,
@@ -254,17 +253,13 @@ def fit(
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     metrics_container_type: Type[M],
-    # fmt: off
-    training_step_func: Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]],  # noqa
-    validation_step_func: Callable[[TS, T, Int[Array, "batch classes"], M], M],
-    # noqa
-    # fmt: on
-    training_hooks: List[TrainingHook[TS, M]] | None = None,
-    validation_hooks: List[ValidationHook[M]] | None = None,
+    training_step_func: TrainingStep,  # noqa
+    validation_step_func: ValidationStep,  # noqa
+    hooks: TrainingHooks | None = None,
     epochs: int = 1,
     prefetch_buffer_size: int = 2,
     verbose: bool = False,
-) -> Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]:
+) -> MetricsAndParams:
     """
     Parameters
     ----------
@@ -282,10 +277,8 @@ def fit(
     validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
         A function that performs a single validation step. It takes the training state, input data, and target data as inputs,
         and returns the metrics.
-    training_hooks : List[TrainingHook[TS, M]] | None, optional
-        A list of training hooks to be executed after each training step. Defaults to None.
-    validation_hooks : List[ValidationHook[M]] | None, optional
-        A list of validation hooks to be executed after each validation step. Defaults to None.
+    hooks : List[TrainingHook[TS, M]] | None, optional
+        A list of training hooks to be executed before and after each training step. Defaults to None.
     epochs : int, optional
         The number of training epochs. Defaults to 1.
     prefetch_buffer_size : int, optional
@@ -301,54 +294,162 @@ def fit(
     if epochs <= 0:
         raise InvalidEpochsNumberError(epochs)
 
-    is_multi_device = len(jax.devices()) > 1
+    if hooks is None:
+        hooks = TrainingHooks()
 
-    if is_multi_device:
-        dropout_key = common_utils.shard_prng_key(training_state.dropout_key)
-        training_state = jax_utils.replicate(training_state)
-        training_state.replace(dropout_key=dropout_key)
-    
-    def step_num():
-        step = training_state.step
-        if is_multi_device:
-            step = jax_utils.unreplicate(step)
-        return int(step)
-        
-    if training_hooks is None:
-        training_hooks = []
-    if validation_hooks is None:
-        validation_hooks = []
+    if jax.device_count() > 0:
+        return _fit_multi_device(
+            training_state=training_state,
+            metrics_container_type=metrics_container_type,
+            training_step_func=training_step_func,
+            training_dataset_factory=training_dataset_factory,
+            validation_dataset_factory=validation_dataset_factory,
+            validation_step_func=validation_step_func,
+            hooks=hooks,
+            epochs=epochs,
+            prefetch_buffer_size=prefetch_buffer_size,
+            verbose=verbose,
+        )
+    else:
+        return _fit_single_device(
+            training_state=training_state,
+            metrics_container_type=metrics_container_type,
+            training_step_func=training_step_func,
+            training_dataset_factory=training_dataset_factory,
+            validation_dataset_factory=validation_dataset_factory,
+            validation_step_func=validation_step_func,
+            hooks=hooks,
+            epochs=epochs,
+            prefetch_buffer_size=prefetch_buffer_size,
+            verbose=verbose,
+        )
+
+
+def _fit_single_device(
+    *,
+    training_state: TS,
+    metrics_container_type: Type[M],
+    training_step_func: TrainingStep,
+    training_dataset_factory: DatasetFactory,
+    validation_dataset_factory: DatasetFactory,
+    validation_step_func: ValidationStep,
+    hooks: TrainingHooks,
+    epochs: int,
+    prefetch_buffer_size: int,
+    verbose: bool,
+) -> MetricsAndParams:
+    for epoch in range(epochs):
+        if verbose:
+            logging.info(f"Epoch {epoch + 1}/{epochs}...")
+
+        for hook in hooks.on_epoch_begin:
+            hook(int(training_state.step))
+
+        training_dataset = prefetch_to_device(
+            training_dataset_factory(), prefetch_buffer_size
+        )
+        training_metrics = metrics_container_type.empty()
+
+        for x_batch, y_batch in training_dataset:
+            for hook in hooks.on_step_begin:
+                hook(int(training_state.step))
+
+            training_state, training_metrics = training_step_func(
+                training_state, x_batch, y_batch, training_metrics
+            )
+
+            for hook in hooks.on_step_end:
+                hook(
+                    int(training_state.step),
+                    training_metrics=training_metrics,
+                    training_state=training_state,
+                )
+        if verbose:
+            logging.info(
+                {f"train_{k}": f"{float(v):.3f}"}
+                for k, v in training_metrics.compute().items()
+            )
+
+        validation_dataset = prefetch_to_device(
+            validation_dataset_factory(), prefetch_buffer_size
+        )
+        validation_metrics = metrics_container_type.empty()
+
+        for x_batch, y_batch in validation_dataset:
+            validation_metrics = validation_step_func(
+                training_state, x_batch, y_batch, validation_metrics
+            )
+
+        if verbose:
+            logging.info(
+                {f"val_{k}": f"{float(v):.3f}"}
+                for k, v in validation_metrics.compute().items()
+            )
+
+        for hook in hooks.on_epoch_end:
+            hook(
+                int(training_state.step),
+                training_state=training_state,
+                validation_metrics=validation_metrics,
+            )
+            if _should_stop_early(hook):
+                break
+
+    params = training_state.params
+    training_metrics = training_metrics.compute()  # noqa
+    validation_metrics = validation_metrics.compute()  # noqa
+
+    return (training_metrics, validation_metrics), params
+
+
+def _fit_multi_device(
+    *,
+    training_state: TS,
+    metrics_container_type: Type[M],
+    training_step_func: TrainingStep,
+    training_dataset_factory: DatasetFactory,
+    validation_dataset_factory: DatasetFactory,
+    validation_step_func: ValidationStep,
+    hooks: TrainingHooks,
+    epochs: int,
+    prefetch_buffer_size: int,
+    verbose: bool,
+) -> MetricsAndParams:
+    # How do we handle prngKey or batch stats?
+    training_state = jax_utils.replicate(training_state)
+    if hasattr(training_state, "dropout_key"):
+        training_state.replace(
+            dropout_key=common_utils.shard_prng_key(training_state.dropout_key)
+        )
+
+    def step_number():
+        return int(jax_utils.unreplicate(training_state.step))
 
     for epoch in range(epochs):
         if verbose:
             logging.info(f"Epoch {epoch + 1}/{epochs}...")
 
-        training_dataset = training_dataset_factory()
-        if prefetch_buffer_size != 0:
-            if is_multi_device:
-                training_dataset = jax_utils.prefetch_to_device(
-                    training_dataset, prefetch_buffer_size
-                )
-            else:
-                training_dataset = prefetch_to_device(
-                    training_dataset, prefetch_buffer_size
-                )
+        for hook in hooks.on_epoch_begin:
+            hook(step_number())
 
-        training_metrics = metrics_container_type.empty()
-
-        if is_multi_device:
-            training_metrics = jax_utils.replicate(training_metrics)
+        training_dataset = jax_utils.prefetch_to_device(
+            training_dataset_factory(), prefetch_buffer_size
+        )
+        training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
+            for hook in hooks.on_step_begin:
+                hook(step_number())
+
             training_state, training_metrics = training_step_func(
                 training_state, x_batch, y_batch, training_metrics
             )
 
-            for hook in training_hooks:
+            for hook in hooks.on_step_end:
                 hook(
-                    step_num(),
-                    training_state=training_state,
+                    step_number(),
                     training_metrics=training_metrics.unreplicate(),
+                    training_state=jax_utils.unreplicate(training_state),
                 )
         if verbose:
             logging.info(
@@ -356,20 +457,10 @@ def fit(
                 for k, v in training_metrics.unreplicate().compute().items()
             )
 
-        validation_dataset = validation_dataset_factory()
-        if prefetch_buffer_size != 0:
-            if is_multi_device:
-                validation_dataset = jax_utils.prefetch_to_device(
-                    validation_dataset, prefetch_buffer_size
-                )
-            else:
-                validation_dataset = prefetch_to_device(
-                    validation_dataset, prefetch_buffer_size
-                )
-        validation_metrics = metrics_container_type.empty()
-
-        if is_multi_device:
-            validation_metrics = jax_utils.replicate(validation_metrics)
+        validation_dataset = jax_utils.prefetch_to_device(
+            validation_dataset_factory(), prefetch_buffer_size
+        )
+        validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
             validation_metrics = validation_step_func(
@@ -382,26 +473,30 @@ def fit(
                 for k, v in validation_metrics.unreplicate().compute().items()
             )
 
-        for val_hook in validation_hooks:
-            val_hook(
-                step_num(),
+        for hook in hooks.on_epoch_end:
+            hook(
+                step_number(),
+                training_state=jax_utils.unreplicate(training_state),
                 validation_metrics=validation_metrics.unreplicate(),
             )
+            if _should_stop_early(hook):
+                break
 
-            if isinstance(val_hook, early_stopping.EarlyStopping):
-                if val_hook.should_stop:
-                    break
+    params = jax_utils.unreplicate(training_state).params
+    training_metrics = training_metrics.unreplicate().compute()  # noqa
+    validation_metrics = validation_metrics.unreplicate().compute()  # noqa
 
-    if is_multi_device:
-        training_state = jax_utils.unreplicate(training_state)
-
-    return (
-        training_metrics.unreplicate().compute(),  # noqa
-        validation_metrics.unreplicate().compute(),  # noqa
-    ), training_state.params
+    return (training_metrics, validation_metrics), params
 
 
-def nan_div(a: float, b: float) -> float:
+def _should_stop_early(hook: Any) -> bool:
+    if isinstance(hook, early_stopping.EarlyStopping) or hasattr(hook, "should_stop"):
+        return hook.should_stop
+    else:
+        return False
+
+
+def _nan_div(a: float, b: float) -> float:
     if b == 0:
         return 0
     else:

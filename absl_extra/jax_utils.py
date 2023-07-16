@@ -22,6 +22,39 @@ T = TypeVar("T")
 P = ParamSpec("P")
 
 
+def requires_tpu(func: Callable[P, T]) -> Callable[P, T]:
+    """
+    Fail if function is executing on host without access to GPU(s).
+    Useful for early detecting container runtime misconfigurations.
+
+    Parameters
+    ----------
+    func:
+        Function, which needs hardware acceleration.
+
+    Returns
+    -------
+
+    func:
+        Function with the same signature as original one.
+
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        if platform.system().lower() != "linux":
+            logging.info("Not running on linux ignoring TPU strategy check.")
+            return func(*args, **kwargs)
+
+        devices = jax.devices()
+        logging.info(f"JAX devices -> {devices}")
+        if "TPU" not in devices[0].device_kind.lower():
+            raise RuntimeError("No TPU available.")
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 @toolz.curry
 def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, T]:
     """
@@ -54,7 +87,7 @@ def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, 
 
         devices = jax.devices()
         logging.info(f"JAX devices -> {devices}")
-        if devices[0].device_kind != "gpu":
+        if devices[0].device_kind.lower() != "gpu":
             raise RuntimeError("No GPU available.")
         return func(*args, **kwargs)
 
@@ -85,7 +118,8 @@ def prefetch_to_device(
     Notes
     -----
     This method is used to prefetch elements from an iterator to a GPU device. It checks if the device is GPU and then
-    enqueues *up to* `size` elements from the iterator to a deque. It uses JAX's `tree_map` and `device_put` functions to move
+    enqueues *up to* `size` elements from the iterator to a deque.
+    It uses JAX's `tree_map` and `device_put` functions to move
     the elements to the GPU device. The generator yields the prefetched elements one at a time.
     """
     queue: Deque[T] = collections.deque()
