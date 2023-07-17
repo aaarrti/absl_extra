@@ -344,9 +344,9 @@ def _fit_single_device(
         for hook in hooks.on_epoch_begin:
             hook(int(training_state.step))
 
-        training_dataset = prefetch_to_device(
-            training_dataset_factory(), prefetch_buffer_size
-        )
+        training_dataset = training_dataset_factory()
+        if prefetch_buffer_size != 0:
+            prefetch_to_device(training_dataset, prefetch_buffer_size)
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
@@ -369,9 +369,9 @@ def _fit_single_device(
                 for k, v in training_metrics.compute().items()
             )
 
-        validation_dataset = prefetch_to_device(
-            validation_dataset_factory(), prefetch_buffer_size
-        )
+        validation_dataset = validation_dataset_factory()
+        if prefetch_buffer_size != 0:
+            validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
@@ -418,7 +418,9 @@ def _fit_multi_device(
     training_state = jax_utils.replicate(training_state)
     if hasattr(training_state, "dropout_key"):
         training_state.replace(
-            dropout_key=common_utils.shard_prng_key(training_state.dropout_key)
+            dropout_key=common_utils.shard_prng_key(
+                jax_utils.unreplicate(training_state.dropout_key)
+            )
         )
 
     def step_number():
@@ -431,14 +433,18 @@ def _fit_multi_device(
         for hook in hooks.on_epoch_begin:
             hook(step_number())
 
-        training_dataset = jax_utils.prefetch_to_device(
-            training_dataset_factory(), prefetch_buffer_size
-        )
+        training_dataset = training_dataset_factory()
+        if prefetch_buffer_size != 0:
+            training_dataset = jax_utils.prefetch_to_device(training_dataset, prefetch_buffer_size)
+        
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
             for hook in hooks.on_step_begin:
                 hook(step_number())
+            
+            x_batch = common_utils.shard(x_batch)
+            y_batch = common_utils.shard(y_batch)
 
             training_state, training_metrics = training_step_func(
                 training_state, x_batch, y_batch, training_metrics
@@ -456,12 +462,17 @@ def _fit_multi_device(
                 for k, v in training_metrics.unreplicate().compute().items()
             )
 
-        validation_dataset = jax_utils.prefetch_to_device(
-            validation_dataset_factory(), prefetch_buffer_size
-        )
+        validation_dataset = validation_dataset_factory()
+        if prefetch_buffer_size != 0:
+            validation_dataset = jax_utils.prefetch_to_device(validation_dataset, prefetch_buffer_size)
+        
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
+            
+            x_batch = common_utils.shard(x_batch)
+            y_batch = common_utils.shard(y_batch)
+            
             validation_metrics = validation_step_func(
                 training_state, x_batch, y_batch, validation_metrics
             )
