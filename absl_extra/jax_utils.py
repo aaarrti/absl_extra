@@ -7,11 +7,11 @@ import logging
 import platform
 import sys
 from typing import Callable, Deque, Generator, Iterable, TypeVar
-from jaxtyping import jaxtyped, Int32, Float, Array
 
-import jax.numpy as jnp
 import jax
+import jax.numpy as jnp
 import toolz
+from jaxtyping import Array, Float, Int32, jaxtyped
 
 if sys.version_info >= (3, 10):
     from typing import ParamSpec
@@ -24,7 +24,7 @@ P = ParamSpec("P")
 
 def requires_tpu(func: Callable[P, T]) -> Callable[P, T]:
     """
-    Fail if function is executing on host without access to GPU(s).
+    Fail if function is executing on host without access to TPU.
     Useful for early detecting container runtime misconfigurations.
 
     Parameters
@@ -147,7 +147,6 @@ def prefetch_to_device(
         enqueue(1)
 
 
-@jaxtyped
 @functools.partial(
     jax.jit,
     static_argnames=[
@@ -158,16 +157,17 @@ def prefetch_to_device(
         "axis",
     ],
 )
-def binary_focal_crossentropy(
-    logits: Float[Array, "batch classes"],
-    labels: Int32[Array, "batch classes"],
+@jaxtyped
+def binary_focal_crossentropy(  # type: ignore
+    logits: Float[Array, "batch classes"],  # noqa
+    labels: Int32[Array, "batch classes"],  # noqa
     *,
     apply_class_balancing: bool = False,
     alpha: float = 0.25,
     gamma: float = 2.0,
     label_smoothing: float = 0.0,
     axis=-1,
-) -> Float[Array, "batch"]:
+) -> Float[Array, "batch"]:  # type: ignore # noqa
     labels = jnp.asarray(labels, logits.dtype)
     label_smoothing = jnp.asarray(label_smoothing, dtype=logits.dtype)
 

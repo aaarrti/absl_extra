@@ -155,10 +155,10 @@ def register_task(
         db = None
 
     if init_callbacks is None:
-        init_callbacks = DEFAULT_INIT_CALLBACKS
+        init_callbacks = DEFAULT_INIT_CALLBACKS  # type: ignore
 
     if post_callbacks is None:
-        post_callbacks = DEFAULT_POST_CALLBACK
+        post_callbacks = DEFAULT_POST_CALLBACK  # type: ignore
 
     def decorator(func: _TaskFn) -> None:
         _TASK_STORE[name] = functools.partial(  # type: ignore

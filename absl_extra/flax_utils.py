@@ -1,38 +1,37 @@
 from __future__ import annotations
 
 from typing import (
+    Any,
     Callable,
     Dict,
     Iterable,
     List,
+    NamedTuple,
     Protocol,
     Tuple,
     Type,
     TypeVar,
     no_type_check,
-    NamedTuple,
-    Any,
 )
 
+import clu.metrics
 import clu.periodic_actions
 import jax
 import jax.numpy as jnp
 from absl import logging
-from clu.metrics import Metric
-from flax import jax_utils
-from flax import struct
+from flax import jax_utils, struct
 from flax.core import frozen_dict
-from flax.training import early_stopping, train_state, common_utils
-from jaxtyping import Array, Float, Int, jaxtyped, Int32
+from flax.training import common_utils, early_stopping, train_state
+from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
 from absl_extra.jax_utils import prefetch_to_device
 
-T = TypeVar("T", contravariant=True)
-TS = TypeVar("TS", bound=train_state.TrainState, contravariant=True)
-M = TypeVar("M", bound=clu.metrics.Collection, contravariant=True)
+T = TypeVar("T", covariant=True)
+TS = TypeVar("TS", bound=train_state.TrainState, covariant=True)
+M = TypeVar("M", bound=clu.metrics.Collection, covariant=True)
 DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  # noqa
-ValidationStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]
-TrainingStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]
+ValidationStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]  # noqa
+TrainingStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]  # noqa
 MetricsAndParams = Tuple[
     Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict
 ]
@@ -70,8 +69,8 @@ class F1Score(clu.metrics.Metric):
     def from_model_output(
         cls,
         *,
-        logits: Float[Array, "batch classes"],
-        labels: Int32[Array, "batch classes"],
+        logits: Float[Array, "batch classes"],  # noqa
+        labels: Int32[Array, "batch classes"],  # noqa
         threshold: float = 0.5,
         **kwargs,
     ) -> "F1Score":
@@ -121,8 +120,8 @@ class BinaryAccuracy(NanSafeAverage):
     def from_model_output(  # noqa
         cls,
         *,
-        logits: Float[Array, "batch classes"],
-        labels: Int32[Array, "batch classes"],
+        logits: Float[Array, "batch classes"],  # noqa
+        labels: Int32[Array, "batch classes"],  # noqa
         threshold: float = 0.5,
         **kwargs,
     ) -> "BinaryAccuracy":
@@ -137,18 +136,18 @@ class OnStepBegin(Protocol[TS, M]):
         ...
 
 
-class OnStepEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> None:
+class OnStepEnd(Protocol[TS, M]):  # type: ignore
+    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> None:  # type: ignore
         ...
 
 
-class OnEpochBegin(Protocol[TS, M]):
+class OnEpochBegin(Protocol[TS, M]):  # type: ignore
     def __call__(self, step: int) -> None:
         ...
 
 
-class OnEpochEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, validation_metrics: M, training_state: TS) -> None:
+class OnEpochEnd(Protocol[TS, M]):  # type: ignore
+    def __call__(self, step: int, *, validation_metrics: M, training_state: TS) -> None:  # type: ignore
         ...
 
 
@@ -249,7 +248,7 @@ def load_from_msgpack(
 @jaxtyped
 def fit(
     *,
-    training_state: TS,
+    training_state: TS,  # type: ignore
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     metrics_container_type: Type[M],
@@ -327,7 +326,7 @@ def fit(
 
 def _fit_single_device(
     *,
-    training_state: TS,
+    training_state: TS,  # type: ignore
     metrics_container_type: Type[M],
     training_step_func: TrainingStep,
     training_dataset_factory: DatasetFactory,
@@ -358,11 +357,11 @@ def _fit_single_device(
                 training_state, x_batch, y_batch, training_metrics
             )
 
-            for hook in hooks.on_step_end:
+            for hook in hooks.on_step_end:  # type: ignore
                 hook(
                     int(training_state.step),
-                    training_metrics=training_metrics,
-                    training_state=training_state,
+                    training_metrics=training_metrics,  # type: ignore
+                    training_state=training_state,  # type: ignore
                 )
         if verbose:
             logging.info(
@@ -386,8 +385,8 @@ def _fit_single_device(
                 for k, v in validation_metrics.compute().items()
             )
 
-        for hook in hooks.on_epoch_end:
-            hook(
+        for hook in hooks.on_epoch_end:  # type: ignore
+            hook(  # type: ignore
                 int(training_state.step),
                 training_state=training_state,
                 validation_metrics=validation_metrics,
@@ -404,7 +403,7 @@ def _fit_single_device(
 
 def _fit_multi_device(
     *,
-    training_state: TS,
+    training_state: TS,  # type: ignore
     metrics_container_type: Type[M],
     training_step_func: TrainingStep,
     training_dataset_factory: DatasetFactory,
@@ -445,8 +444,8 @@ def _fit_multi_device(
                 training_state, x_batch, y_batch, training_metrics
             )
 
-            for hook in hooks.on_step_end:
-                hook(
+            for hook in hooks.on_step_end:  # type: ignore
+                hook(  # type: ignore
                     step_number(),
                     training_metrics=training_metrics.unreplicate(),
                     training_state=jax_utils.unreplicate(training_state),
@@ -473,8 +472,8 @@ def _fit_multi_device(
                 for k, v in validation_metrics.unreplicate().compute().items()
             )
 
-        for hook in hooks.on_epoch_end:
-            hook(
+        for hook in hooks.on_epoch_end:  # type: ignore
+            hook(  # type: ignore
                 step_number(),
                 training_state=jax_utils.unreplicate(training_state),
                 validation_metrics=validation_metrics.unreplicate(),

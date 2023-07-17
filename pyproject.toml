@@ -23,7 +23,7 @@ dev = [
     "black",
     "pytest",
     "chex",
-    "absl_extra[mongo,ml_collections,slack,tensorflow,jax]"
+    "absl_extra[mongo,ml_collections,slack,tensorflow,jax,flax]"
 ]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]
@@ -33,8 +33,14 @@ tensorflow = [
     "tensorflow_macos; sys_platform == 'darwin'"
 ]
 jax = [
+    "jaxtyping",
     "jax",
     "jaxlib"
+]
+flax = [
+    "absl_extra[jax]",
+    "flax",
+    "clu"
 ]
 
 
