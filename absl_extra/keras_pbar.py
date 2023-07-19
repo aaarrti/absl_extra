@@ -10,7 +10,7 @@ except ModuleNotFoundError:
 T = TypeVar("T")
 
 
-def pbar(iterable: Iterable[T], n: int | None = None) -> Iterable[T]:
+def keras_pbar(iterable: Iterable[T], n: int | None = None) -> Iterable[T]:
     """
     Prints Keras progress bar to stdout and updates it on every iteration.
 
@@ -21,7 +21,7 @@ def pbar(iterable: Iterable[T], n: int | None = None) -> Iterable[T]:
     n:
         If iterable is not sized, must explicitly provide the length.
 
-    Returns2
+    Returns
     -------
 
     it:
