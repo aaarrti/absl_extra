@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import (
-    Any,
     Callable,
     Dict,
     Iterable,
@@ -20,15 +19,15 @@ import jax.numpy as jnp
 from absl import logging
 from flax import jax_utils, struct
 from flax.core import frozen_dict
-from flax.training import common_utils, early_stopping, train_state
+from flax.training import common_utils, train_state
 from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.keras_pbar import keras_pbar
 
-T = TypeVar("T", covariant=True)
-TS = TypeVar("TS", bound=train_state.TrainState, covariant=True)
-M = TypeVar("M", bound=clu.metrics.Collection, covariant=True)
+T = TypeVar("T")
+TS = TypeVar("TS", bound=train_state.TrainState)
+M = TypeVar("M", bound=clu.metrics.Collection)
 DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  # noqa
 ValidationStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]  # noqa
 TrainingStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]  # noqa
@@ -132,7 +131,7 @@ class BinaryAccuracy(NanSafeAverage):
         )
 
 
-class OnStepBegin(Protocol[TS, M]):
+class OnStepBegin(Protocol[TS, M]):  # type: ignore
     def __call__(self, step: int) -> None:
         ...
 
@@ -153,12 +152,26 @@ class OnEpochEnd(Protocol[TS, M]):  # type: ignore
 
 
 class OnTrainingBegin(Protocol[TS, M]):  # type: ignore
-    def __call__(self, step: int, *, training_metrics: M, validation_metrics: M, training_state: TS) -> None:  # type: ignore
+    def __call__(
+        self,
+        step: int,
+        *,
+        training_metrics: M,  # type: ignore
+        validation_metrics: M,  # type: ignore
+        training_state: TS,  # type: ignore
+    ) -> None:  # type: ignore
         ...
 
 
 class OnTrainingEnd(Protocol[TS, M]):  # type: ignore
-    def __call__(self, step: int, *, training_metrics: M, validation_metrics: M, training_state: TS) -> None:  # type: ignore
+    def __call__(
+        self,
+        step: int,
+        *,
+        training_metrics: M,  # type: ignore
+        validation_metrics: M,  # type: ignore
+        training_state: TS,  # type: ignore
+    ) -> None:  # type: ignore
         ...
 
 
@@ -325,6 +338,7 @@ def fit(
             epochs=epochs,
             prefetch_buffer_size=prefetch_buffer_size,
             verbose=verbose,
+            num_training_steps=num_training_steps,
         )
     else:
         return _fit_single_device(
@@ -338,6 +352,7 @@ def fit(
             epochs=epochs,
             prefetch_buffer_size=prefetch_buffer_size,
             verbose=verbose,
+            num_training_steps=num_training_steps,
         )
 
 
@@ -385,6 +400,8 @@ def _fit_single_device(
                     training_metrics=training_metrics,  # type: ignore
                     training_state=training_state,  # type: ignore
                 )
+                if hasattr(hook, "should_stop") and hook.should_stop:
+                    break
         if verbose:
             logging.info(
                 {f"train_{k}": f"{float(v):.3f}"}
@@ -415,7 +432,7 @@ def _fit_single_device(
                 training_state=training_state,
                 validation_metrics=validation_metrics,
             )
-            if _should_stop_early(hook):
+            if hasattr(hook, "should_stop") and hook.should_stop:
                 break
 
     params = training_state.params
@@ -483,6 +500,8 @@ def _fit_multi_device(
                     training_metrics=training_metrics.unreplicate(),
                     training_state=jax_utils.unreplicate(training_state),
                 )
+                if hasattr(hook, "should_stop") and hook.should_stop:
+                    break
         if verbose:
             logging.info(
                 {f"train_{k}": f"{float(v):.3f}"}
@@ -517,7 +536,7 @@ def _fit_multi_device(
                 training_state=jax_utils.unreplicate(training_state),
                 validation_metrics=validation_metrics.unreplicate(),
             )
-            if _should_stop_early(hook):
+            if hasattr(hook, "should_stop") and hook.should_stop:
                 break
 
     params = jax_utils.unreplicate(training_state).params
@@ -525,13 +544,6 @@ def _fit_multi_device(
     validation_metrics = validation_metrics.unreplicate().compute()  # noqa
 
     return (training_metrics, validation_metrics), params
-
-
-def _should_stop_early(hook: Any) -> bool:
-    if isinstance(hook, early_stopping.EarlyStopping) or hasattr(hook, "should_stop"):
-        return hook.should_stop
-    else:
-        return False
 
 
 def _nan_div(a: float, b: float) -> float:
