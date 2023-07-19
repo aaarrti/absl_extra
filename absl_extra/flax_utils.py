@@ -6,14 +6,13 @@ from typing import (
     Dict,
     Iterable,
     List,
-    NamedTuple,
     Protocol,
     Tuple,
     Type,
     TypeVar,
     no_type_check,
 )
-
+import dataclasses
 import clu.metrics
 import clu.periodic_actions
 import jax
@@ -153,11 +152,24 @@ class OnEpochEnd(Protocol[TS, M]):  # type: ignore
         ...
 
 
-class TrainingHooks(NamedTuple):
-    on_epoch_begin: List[OnEpochBegin] = []
-    on_epoch_end: List[OnEpochEnd] = []
-    on_step_begin: List[OnStepBegin] = []
-    on_step_end: List[OnStepEnd] = []
+class OnTrainingBegin(Protocol[TS, M]):  # type: ignore
+    def __call__(self, step: int, *, training_metrics: M, validation_metrics: M, training_state: TS) -> None:  # type: ignore
+        ...
+
+
+class OnTrainingEnd(Protocol[TS, M]):  # type: ignore
+    def __call__(self, step: int, *, training_metrics: M, validation_metrics: M, training_state: TS) -> None:  # type: ignore
+        ...
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TrainingHooks:
+    on_epoch_begin: List[OnEpochBegin] = dataclasses.field(default_factory=list)
+    on_epoch_end: List[OnEpochEnd] = dataclasses.field(default_factory=list)
+    on_step_begin: List[OnStepBegin] = dataclasses.field(default_factory=list)
+    on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
+    on_training_begin: List[OnTrainingBegin] = dataclasses.field(default_factory=list)
+    on_training_end: List[OnTrainingEnd] = dataclasses.field(default_factory=list)
 
 
 class UncheckedReportProgress(clu.periodic_actions.ReportProgress):

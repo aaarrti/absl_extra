@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 from importlib import util
+import dataclasses
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -9,7 +10,6 @@ from typing import (
     Dict,
     List,
     Mapping,
-    NamedTuple,
     Protocol,
     TypeVar,
 )
@@ -39,7 +39,8 @@ if TYPE_CHECKING:
     from absl_extra.callbacks import CallbackFn
 
 
-class MongoConfig(NamedTuple):
+@dataclasses.dataclass(frozen=True, slots=True)
+class MongoConfig:
     uri: str
     db_name: str
     collection: str
