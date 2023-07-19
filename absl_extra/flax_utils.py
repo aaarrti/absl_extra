@@ -371,7 +371,9 @@ def _fit_single_device(
 
         validation_dataset = validation_dataset_factory()
         if prefetch_buffer_size != 0:
-            validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
+            validation_dataset = prefetch_to_device(
+                validation_dataset, prefetch_buffer_size
+            )
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
@@ -435,14 +437,15 @@ def _fit_multi_device(
 
         training_dataset = training_dataset_factory()
         if prefetch_buffer_size != 0:
-            training_dataset = jax_utils.prefetch_to_device(training_dataset, prefetch_buffer_size)
-        
+            training_dataset = jax_utils.prefetch_to_device(
+                training_dataset, prefetch_buffer_size
+            )
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
             for hook in hooks.on_step_begin:
                 hook(step_number())
-            
+
             x_batch = common_utils.shard(x_batch)
             y_batch = common_utils.shard(y_batch)
 
@@ -464,15 +467,15 @@ def _fit_multi_device(
 
         validation_dataset = validation_dataset_factory()
         if prefetch_buffer_size != 0:
-            validation_dataset = jax_utils.prefetch_to_device(validation_dataset, prefetch_buffer_size)
-        
+            validation_dataset = jax_utils.prefetch_to_device(
+                validation_dataset, prefetch_buffer_size
+            )
+
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            
             x_batch = common_utils.shard(x_batch)
             y_batch = common_utils.shard(y_batch)
-            
             validation_metrics = validation_step_func(
                 training_state, x_batch, y_batch, validation_metrics
             )
