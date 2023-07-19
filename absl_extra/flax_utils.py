@@ -25,6 +25,7 @@ from flax.training import common_utils, early_stopping, train_state
 from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
 from absl_extra.jax_utils import prefetch_to_device
+from absl_extra.keras_pbar import keras_pbar
 
 T = TypeVar("T", covariant=True)
 TS = TypeVar("TS", bound=train_state.TrainState, covariant=True)
@@ -259,6 +260,7 @@ def fit(
     epochs: int = 1,
     prefetch_buffer_size: int = 2,
     verbose: bool = False,
+    num_training_steps: int | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -285,6 +287,8 @@ def fit(
         The size of the prefetch buffer for loading data. Defaults to 2.
     verbose : bool, optional
         Whether to display verbose output during training. Defaults to False.
+    num_training_steps:
+        Must be provided in cases verbose=True, and dataset is not typing.Sized.
 
     Returns
     -------
@@ -337,6 +341,7 @@ def _fit_single_device(
     epochs: int,
     prefetch_buffer_size: int,
     verbose: bool,
+    num_training_steps: int | None,
 ) -> MetricsAndParams:
     for epoch in range(epochs):
         if verbose:
@@ -346,8 +351,12 @@ def _fit_single_device(
             hook(int(training_state.step))
 
         training_dataset = training_dataset_factory()
+
         if prefetch_buffer_size != 0:
             prefetch_to_device(training_dataset, prefetch_buffer_size)
+
+        if verbose:
+            training_dataset = keras_pbar(training_dataset, n=num_training_steps)
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
@@ -372,7 +381,9 @@ def _fit_single_device(
 
         validation_dataset = validation_dataset_factory()
         if prefetch_buffer_size != 0:
-            validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
+            validation_dataset = prefetch_to_device(
+                validation_dataset, prefetch_buffer_size
+            )
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
@@ -414,6 +425,7 @@ def _fit_multi_device(
     epochs: int,
     prefetch_buffer_size: int,
     verbose: bool,
+    num_training_steps: int | None,
 ) -> MetricsAndParams:
     # How do we handle prngKey or batch stats?
     training_state = jax_utils.replicate(training_state)
@@ -436,16 +448,18 @@ def _fit_multi_device(
 
         training_dataset = training_dataset_factory()
         if prefetch_buffer_size != 0:
-            training_dataset = jax_utils.prefetch_to_device(training_dataset, prefetch_buffer_size)
-        
+            training_dataset = jax_utils.prefetch_to_device(
+                training_dataset, prefetch_buffer_size
+            )
+
+        if verbose:
+            training_dataset = keras_pbar(training_dataset, n=num_training_steps)
+
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
             for hook in hooks.on_step_begin:
                 hook(step_number())
-            
-            x_batch = common_utils.shard(x_batch)
-            y_batch = common_utils.shard(y_batch)
 
             training_state, training_metrics = training_step_func(
                 training_state, x_batch, y_batch, training_metrics
@@ -465,15 +479,16 @@ def _fit_multi_device(
 
         validation_dataset = validation_dataset_factory()
         if prefetch_buffer_size != 0:
-            validation_dataset = jax_utils.prefetch_to_device(validation_dataset, prefetch_buffer_size)
-        
+            validation_dataset = jax_utils.prefetch_to_device(
+                validation_dataset, prefetch_buffer_size
+            )
+
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            
             x_batch = common_utils.shard(x_batch)
             y_batch = common_utils.shard(y_batch)
-            
+
             validation_metrics = validation_step_func(
                 training_state, x_batch, y_batch, validation_metrics
             )
