@@ -74,7 +74,8 @@ class F1Score(clu.metrics.Metric):
         threshold: float = 0.5,
         **kwargs,
     ) -> "F1Score":
-        predicted = jnp.asarray(logits >= threshold, labels.dtype)
+        probs = jax.nn.sigmoid(logits)
+        predicted = jnp.asarray(probs >= threshold, labels.dtype)
         true_positive = jnp.sum((predicted == 1) & (labels == 1))
         false_positive = jnp.sum((predicted == 1) & (labels == 0))
         false_negative = jnp.sum((predicted == 0) & (labels == 1))

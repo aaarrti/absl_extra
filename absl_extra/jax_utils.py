@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import collections
-import functools
 import itertools
 import logging
-import platform
 import sys
-from typing import Callable, Deque, Generator, Iterable, TypeVar
+from typing import Deque, Generator, Iterable, TypeVar
 
 import jax
-import jax.numpy as jnp
-import toolz
-from jaxtyping import Array, Float, Int32, jaxtyped
 
 if sys.version_info >= (3, 10):
     from typing import ParamSpec
@@ -20,78 +15,6 @@ else:
 
 T = TypeVar("T")
 P = ParamSpec("P")
-
-
-def requires_tpu(func: Callable[P, T]) -> Callable[P, T]:
-    """
-    Fail if function is executing on host without access to TPU.
-    Useful for early detecting container runtime misconfigurations.
-
-    Parameters
-    ----------
-    func:
-        Function, which needs hardware acceleration.
-
-    Returns
-    -------
-
-    func:
-        Function with the same signature as original one.
-
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        if platform.system().lower() != "linux":
-            logging.info("Not running on linux ignoring TPU strategy check.")
-            return func(*args, **kwargs)
-
-        devices = jax.devices()
-        logging.info(f"JAX devices -> {devices}")
-        if "TPU" not in devices[0].device_kind.lower():
-            raise RuntimeError("No TPU available.")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-@toolz.curry
-def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, T]:
-    """
-    Fail if function is executing on host without access to GPU(s).
-    Useful for early detecting container runtime misconfigurations.
-
-    Parameters
-    ----------
-    func:
-        Function, which needs hardware acceleration.
-    linux_only:
-        If set to true, will ignore check on non-linux hosts.
-
-
-    Returns
-    -------
-
-    func:
-        Function with the same signature as original one.
-
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        if linux_only and platform.system().lower() != "linux":
-            logging.info(
-                "Not running on linux, and linux_only==True, ignoring GPU strategy check."
-            )
-            return func(*args, **kwargs)
-
-        devices = jax.devices()
-        logging.info(f"JAX devices -> {devices}")
-        if devices[0].device_kind.lower() != "gpu":
-            raise RuntimeError("No GPU available.")
-        return func(*args, **kwargs)
-
-    return wrapper
 
 
 def prefetch_to_device(
@@ -145,49 +68,3 @@ def prefetch_to_device(
     while queue:
         yield queue.popleft()
         enqueue(1)
-
-
-@functools.partial(
-    jax.jit,
-    static_argnames=[
-        "apply_class_balancing",
-        "alpha",
-        "gamma",
-        "label_smoothing",
-        "axis",
-    ],
-)
-@jaxtyped
-def binary_focal_crossentropy(  # type: ignore
-    logits: Float[Array, "batch classes"],  # noqa
-    labels: Int32[Array, "batch classes"],  # noqa
-    *,
-    apply_class_balancing: bool = False,
-    alpha: float = 0.25,
-    gamma: float = 2.0,
-    label_smoothing: float = 0.0,
-    axis=-1,
-) -> Float[Array, "batch"]:  # type: ignore # noqa
-    labels = jnp.asarray(labels, logits.dtype)
-    label_smoothing = jnp.asarray(label_smoothing, dtype=logits.dtype)
-
-    def _smooth_labels():
-        return labels * (1.0 - label_smoothing) + 0.5 * label_smoothing
-
-    if apply_class_balancing:
-        labels = _smooth_labels()
-    else:
-        labels = labels
-
-    logits = jax.nn.sigmoid(logits)
-    epsilon = jnp.finfo(logits.dtype).eps
-    logits = jnp.clip(logits, epsilon, 1.0 - epsilon)
-
-    p_t = labels * logits + (1 - labels) * (1 - logits)
-    alpha_t = labels * alpha + (1 - labels) * (1 - alpha)
-    focal_weight = alpha_t * (1 - p_t) ** gamma
-
-    bce = -(labels * jnp.log(logits) + (1 - labels) * jnp.log(1 - logits))
-    focal_bce = focal_weight * bce
-
-    return jnp.mean(focal_bce, axis=axis)
