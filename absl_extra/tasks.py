@@ -29,17 +29,11 @@ else:
     Collection = type(None)
     logging.warning("pymongo not installed.")
 
-if util.find_spec("ml_collections"):
-    from ml_collections import ConfigDict, config_flags
-else:
-    logging.warning("ml_collections not installed")
-    ConfigDict = None
-
 if TYPE_CHECKING:
     from absl_extra.callbacks import CallbackFn
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True)
 class MongoConfig:
     uri: str
     db_name: str
@@ -56,9 +50,7 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
 
 
 class _TaskFn(Protocol):
-    def __call__(
-        self, *, config: ConfigDict = None, db: Collection = None, **kwargs
-    ) -> None:
+    def __call__(self, *, db: Collection = None, **kwargs) -> None:
         ...
 
 
@@ -77,32 +69,27 @@ def _make_task_func(
     *,
     name: str,
     notifier: BaseNotifier | Callable[[], BaseNotifier],
-    config_file: str | None,
     init_callbacks: List[CallbackFn],
     post_callbacks: List[CallbackFn],
-    db: Collection | None,
+    db_factory=None,
 ) -> _TaskFn:
     _name = name
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         app.install_exception_handler(_ExceptionHandlerImpl(name, notifier))  # type: ignore
-        if util.find_spec("ml_collections") and config_file is not None:
-            config = config_flags.DEFINE_config_file("config", default=config_file)
-            config = config.value
-            kwargs["config"] = config
-        else:
-            config = None
-        if db is not None:
+        kwargs = {}
+        if db_factory is not None:
+            db = db_factory()
             kwargs["db"] = db
 
         for hook in init_callbacks:
-            hook(_name, notifier=notifier, config=config, db=db)
+            hook(_name, notifier=notifier, **kwargs)
 
         func(*args, **kwargs)
 
         for hook in post_callbacks:
-            hook(_name, notifier=notifier, config=config, db=db)
+            hook(_name, notifier=notifier, **kwargs)
 
     return wrapper
 
@@ -111,7 +98,6 @@ def register_task(
     *,
     name: str = "main",
     notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
-    config_file: str | None = None,
     mongo_config: MongoConfig | Mapping[str, Any] | None = None,
     init_callbacks: List[CallbackFn] | None = None,
     post_callbacks: List[CallbackFn] | None = None,
@@ -123,8 +109,6 @@ def register_task(
         The name of the task. Default is "main".
     notifier : BaseNotifier | Callable[[], BaseNotifier] | None, optional
         The notifier object or callable that returns a notifier object. Default is None.
-    config_file : str | None, optional
-        The path to the configuration file. Default is None.
     mongo_config : MongoConfig | Mapping[str, Any] | None, optional
         The configuration object for MongoDB or a mapping of configuration values. Default is None.
     init_callbacks : List[CallbackFn] | None, optional
@@ -144,16 +128,17 @@ def register_task(
     if notifier is None:
         notifier = LoggingNotifier()
 
+    kwargs = {}
+
     if util.find_spec("pymongo") and mongo_config is not None:
         if isinstance(mongo_config, Mapping):
             mongo_config = MongoConfig(**mongo_config)
-        db: Collection[Mapping[str, ...]] = (
+        db_factory = lambda: (
             MongoClient(mongo_config.uri)
             .get_database(mongo_config.db_name)
             .get_collection(mongo_config.collection)
         )
-    else:
-        db = None
+        kwargs["db_factory"] = db_factory
 
     if init_callbacks is None:
         init_callbacks = DEFAULT_INIT_CALLBACKS  # type: ignore
@@ -168,8 +153,7 @@ def register_task(
             notifier=notifier,
             init_callbacks=init_callbacks,
             post_callbacks=post_callbacks,
-            db=db,
-            config_file=config_file,
+            **kwargs,
         )(func)
 
     return decorator

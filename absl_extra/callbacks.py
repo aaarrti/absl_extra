@@ -73,5 +73,5 @@ DEFAULT_POST_CALLBACK = [
 
 if util.find_spec("tensorflow"):
     DEFAULT_INIT_CALLBACKS.append(log_tensorflow_devices)
-if util.find_spec("jax"):
+if util.find_spec("jax") and util.find_spec("jaxlib"):
     DEFAULT_INIT_CALLBACKS.append(log_jax_devices)

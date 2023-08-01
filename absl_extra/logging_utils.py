@@ -61,3 +61,39 @@ def setup_logging(
         import tensorflow as tf
 
         tf.get_logger().setLevel(log_level)
+
+
+@toolz.curry
+def log_before(
+    func: Callable[P, T], logger: Callable[[str], None] = logging.debug
+) -> Callable[P, T]:
+    """Log functions argument before calling it."""
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        func_args = inspect.signature(func).bind(*args, **kwargs).arguments
+        func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
+        logger(
+            f"Entered {func.__module__}.{func.__qualname__} with args ( {func_args_str} )"
+        )
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+@toolz.curry
+def log_after(
+    func: Callable[P, T], logger: Callable[[str], None] = logging.debug
+) -> Callable[P, T]:
+    """Log's function's return value."""
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        retval = func(*args, **kwargs)
+        logger(
+            f"Exited {func.__module__}.{func.__qualname__}(...) with value: "
+            + repr(retval)
+        )
+        return retval
+
+    return wrapper
