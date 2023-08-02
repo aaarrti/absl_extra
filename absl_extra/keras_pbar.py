@@ -4,7 +4,7 @@ from typing import Sized, Iterable, TypeVar
 
 try:
     from keras_core.utils import Progbar
-except ModuleNotFoundError:
+except Exception:
     from keras.utils import Progbar
 
 T = TypeVar("T")
