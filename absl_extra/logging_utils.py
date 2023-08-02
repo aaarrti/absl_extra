@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import functools
 import inspect
-import sys
 from importlib import util
 from typing import Callable, Literal, TypeVar
 
 import toolz
 from absl import logging
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec
-else:
-    from typing_extensions import ParamSpec
+from absl_extra.typing_utils import ParamSpec
 
 
 T = TypeVar("T")
@@ -88,7 +83,7 @@ def log_after(
     """Log's function's return value."""
 
     @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         retval = func(*args, **kwargs)
         logger(
             f"Exited {func.__module__}.{func.__qualname__}(...) with value: "

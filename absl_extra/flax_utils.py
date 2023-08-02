@@ -4,17 +4,22 @@ from typing import (
     Callable,
     Dict,
     Iterable,
-    List,
     Protocol,
     Tuple,
     Type,
     TypeVar,
     no_type_check,
+    runtime_checkable,
+    Sequence,
+    List,
+    Any
 )
 import dataclasses
 import clu.metrics
 import clu.periodic_actions
+import clu.metric_writers
 import jax
+from jax.sharding import NamedSharding
 import jax.numpy as jnp
 from absl import logging
 from flax import jax_utils, struct
@@ -24,16 +29,23 @@ from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.keras_pbar import keras_pbar
+from absl_extra.dataclass import dataclass
 
 T = TypeVar("T")
 TS = TypeVar("TS", bound=train_state.TrainState)
 M = TypeVar("M", bound=clu.metrics.Collection)
+S = TypeVar("S", bound=Sequence)
 DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  # noqa
-ValidationStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]  # noqa
-TrainingStep = Callable[[TS, T, Int[Array, "batch classes"], M], Tuple[TS, M]]  # noqa
+ValidationStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]  # noqa
+TrainingStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]  # noqa
 MetricsAndParams = Tuple[
     Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict
 ]
+
+
+@runtime_checkable
+class EarlyStopping(Protocol):
+    should_stop: bool
 
 
 @struct.dataclass
@@ -175,7 +187,7 @@ class OnTrainingEnd(Protocol[TS, M]):  # type: ignore
         ...
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclass
 class TrainingHooks:
     on_epoch_begin: List[OnEpochBegin] = dataclasses.field(default_factory=list)
     on_epoch_end: List[OnEpochEnd] = dataclasses.field(default_factory=list)
@@ -286,6 +298,9 @@ def fit(
     prefetch_buffer_size: int = 2,
     verbose: bool = False,
     num_training_steps: int | None = None,
+    skip_shard: bool = False,
+    data_sharding: NamedSharding | None = None,
+    params_replication: NamedSharding | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -309,11 +324,21 @@ def fit(
     epochs : int, optional
         The number of training epochs. Defaults to 1.
     prefetch_buffer_size : int, optional
-        The size of the prefetch buffer for loading data. Defaults to 2.
+        The size of the prefetch buffer for loading data. Defaults to 2. Set to 0 for TPU.
     verbose : bool, optional
         Whether to display verbose output during training. Defaults to False.
     num_training_steps:
         Must be provided in cases verbose=True, and dataset is not typing.Sized.
+    skip_shard:
+        If set to True, will skip sharding of data before passing it to training_step_func
+        and validation_step_func. You might want it, in case your train step is decorated
+        with @pad_shard_unpad. Applies only to distributed training.
+    data_sharding:
+        NamesSharding, in case you want more fine-grained control on how data is sharded across devices.
+        Applies only to distributed training.
+    params_replication:
+        NamedSharding, in case you want more fine-grained control on how params are replicated across replicas,
+        e.g., you might want to shard large kernel instead of replicating them (or both).
 
     Returns
     -------
@@ -339,6 +364,9 @@ def fit(
             prefetch_buffer_size=prefetch_buffer_size,
             verbose=verbose,
             num_training_steps=num_training_steps,
+            skip_shard=skip_shard,
+            data_sharding=data_sharding,
+            params_replication=params_replication,
         )
     else:
         return _fit_single_device(
@@ -390,9 +418,10 @@ def _fit_single_device(
             for hook in hooks.on_step_begin:
                 hook(int(training_state.step))
 
-            training_state, training_metrics = training_step_func(
-                training_state, x_batch, y_batch, training_metrics
+            training_state, training_metrics_i = training_step_func(
+                training_state, x_batch, y_batch
             )
+            training_metrics = training_metrics.merge(training_metrics_i)
 
             for hook in hooks.on_step_end:  # type: ignore
                 hook(
@@ -400,7 +429,7 @@ def _fit_single_device(
                     training_metrics=training_metrics,  # type: ignore
                     training_state=training_state,  # type: ignore
                 )
-                if hasattr(hook, "should_stop") and hook.should_stop:
+                if isinstance(hook, EarlyStopping) and hook.should_stop:
                     break
         if verbose:
             logging.info(
@@ -416,9 +445,10 @@ def _fit_single_device(
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
-            validation_metrics = validation_step_func(
-                training_state, x_batch, y_batch, validation_metrics
+            validation_metrics_i = validation_step_func(
+                training_state, x_batch, y_batch
             )
+            validation_metrics = validation_metrics.merge(validation_metrics_i)
 
         if verbose:
             logging.info(
@@ -432,7 +462,7 @@ def _fit_single_device(
                 training_state=training_state,
                 validation_metrics=validation_metrics,
             )
-            if hasattr(hook, "should_stop") and hook.should_stop:
+            if isinstance(hook, EarlyStopping) and hook.should_stop:
                 break
 
     params = training_state.params
@@ -455,8 +485,11 @@ def _fit_multi_device(
     prefetch_buffer_size: int,
     verbose: bool,
     num_training_steps: int | None,
+    skip_shard: bool,
+    data_sharding: NamedSharding | None,
+    params_replication: NamedSharding | None,
 ) -> MetricsAndParams:
-    # How do we handle prngKey or batch stats?
+    # How do we handle batch stats?
     training_state = jax_utils.replicate(training_state)
     if hasattr(training_state, "dropout_key"):
         training_state.replace(
@@ -467,6 +500,17 @@ def _fit_multi_device(
 
     def step_number():
         return int(jax_utils.unreplicate(training_state.step))
+
+    def shard_x_y(x, y):
+        if not skip_shard:
+            if data_sharding is not None:
+                x = jax.device_put(x, data_sharding)
+                y = jax.device_put(y, data_sharding)
+            else:
+                x = common_utils.shard(x)
+                y = common_utils.shard(y)
+
+        return x, y
 
     for epoch in range(epochs):
         if verbose:
@@ -487,12 +531,16 @@ def _fit_multi_device(
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
+            x_batch, y_batch = shard_x_y(x_batch, y_batch)
+
             for hook in hooks.on_step_begin:
                 hook(step_number())
 
-            training_state, training_metrics = training_step_func(
-                training_state, x_batch, y_batch, training_metrics
+            training_state, training_metrics_i = training_step_func(
+                training_state, x_batch, y_batch
             )
+
+            training_metrics = training_metrics.merge(training_metrics_i)
 
             for hook in hooks.on_step_end:  # type: ignore
                 hook(  # type: ignore
@@ -500,7 +548,7 @@ def _fit_multi_device(
                     training_metrics=training_metrics.unreplicate(),
                     training_state=jax_utils.unreplicate(training_state),
                 )
-                if hasattr(hook, "should_stop") and hook.should_stop:
+                if isinstance(hook, EarlyStopping) and hook.should_stop:
                     break
         if verbose:
             logging.info(
@@ -517,12 +565,11 @@ def _fit_multi_device(
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            x_batch = common_utils.shard(x_batch)
-            y_batch = common_utils.shard(y_batch)
-
-            validation_metrics = validation_step_func(
-                training_state, x_batch, y_batch, validation_metrics
+            x_batch, y_batch = shard_x_y(x_batch, y_batch)
+            validation_metrics_i = validation_step_func(
+                training_state, x_batch, y_batch
             )
+            validation_metrics = validation_metrics.merge(validation_metrics_i)
 
         if verbose:
             logging.info(
@@ -536,7 +583,7 @@ def _fit_multi_device(
                 training_state=jax_utils.unreplicate(training_state),
                 validation_metrics=validation_metrics.unreplicate(),
             )
-            if hasattr(hook, "should_stop") and hook.should_stop:
+            if isinstance(hook, EarlyStopping) and hook.should_stop:
                 break
 
     params = jax_utils.unreplicate(training_state).params
@@ -544,6 +591,97 @@ def _fit_multi_device(
     validation_metrics = validation_metrics.unreplicate().compute()  # noqa
 
     return (training_metrics, validation_metrics), params
+
+
+def make_training_hooks(
+    num_training_steps: int,
+    epochs: int,
+    log_frequency: int,
+    logdir: str = "tensorboard",
+    hyperparams_factory: Callable[[], Dict[str, Any]] | None = None,
+) -> TrainingHooks:
+    """
+    Create typical training hooks
+
+    - training metrics writer
+    - validation metrics writer
+    - report progress
+
+    Parameters
+    ----------
+    num_training_steps
+    epochs
+    log_frequency:
+        Number of times per epoch to write metrics/report progress.
+    hyperparams_factory:
+        If not None, will write return value as hyperparams at beginning of each epoch to
+        use with Tensorboard visualization.
+    logdir:
+        Directory where to write metrics into.
+
+    Returns
+    -------
+
+    """
+
+    training_writer = clu.metric_writers.create_default_writer(
+        logdir=logdir, collection="training"
+    )
+    validation_writer = clu.metric_writers.create_default_writer(
+        logdir=logdir, collection="validation"
+    )
+
+    report_progress = clu.periodic_actions.ReportProgress(
+        on_steps=[1, num_training_steps * epochs],
+        every_steps=num_training_steps // log_frequency,
+        num_train_steps=num_training_steps * epochs,
+        writer=training_writer,
+    )
+
+    def _flush(*args, **kwargs):
+        training_writer.flush()
+        validation_writer.flush()
+
+    on_train_begin = []
+
+    if hyperparams_factory is not None:
+        on_train_begin.append(
+            lambda *args, **kwargs: training_writer.write_hparams(hyperparams_factory())  # type: ignore
+        )
+
+    on_step_begin = [
+        lambda step, *args, **kwargs: report_progress(step),
+    ]
+
+    on_step_end = [
+        clu.periodic_actions.PeriodicCallback(
+            on_steps=[1, num_training_steps * epochs],
+            every_steps=num_training_steps // log_frequency,
+            callback_fn=lambda step, *args, training_metrics, **kwargs: training_writer.write_scalars(
+                step, training_metrics.compute()
+            ),
+        ),
+    ]
+
+    on_epoch_end = [
+        UncheckedPeriodicCallback(
+            on_steps=[1, num_training_steps * epochs],
+            every_steps=num_training_steps // log_frequency,
+            callback_fn=lambda step, *args, validation_metrics, **kwargs: validation_writer.write_scalars(
+                step, validation_metrics.compute()
+            ),
+        ),
+    ]
+
+    on_train_end = [lambda *args, **kwargs: _flush]
+
+    return TrainingHooks(  # type: ignore
+        on_training_begin=on_train_begin,
+        on_step_begin=on_step_begin,
+        on_epoch_end=on_epoch_end,
+        on_step_end=on_step_end,
+        on_training_end=on_train_end,
+    )
 
 
 def _nan_div(a: float, b: float) -> float:

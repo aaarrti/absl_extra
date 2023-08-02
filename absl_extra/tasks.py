@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 from importlib import util
-import dataclasses
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -17,10 +16,17 @@ from typing import (
 from absl import app, flags, logging
 
 from absl_extra.notifier import BaseNotifier, LoggingNotifier
+from absl_extra.dataclass import dataclass
 
 T = TypeVar("T", bound=Callable)
 FLAGS = flags.FLAGS
 flags.DEFINE_string("task", default="main", help="Name of the function to execute.")
+flags.DEFINE_enum(
+    "log_level",
+    enum_values=["INFO", "DEBUG", "ERROR", "WARNING"],
+    default="INFO",
+    help="Logging level to use. If None, no auto-setup will be executed.",
+)
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
@@ -33,7 +39,7 @@ if TYPE_CHECKING:
     from absl_extra.callbacks import CallbackFn
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass
 class MongoConfig:
     uri: str
     db_name: str
@@ -133,7 +139,7 @@ def register_task(
     if util.find_spec("pymongo") and mongo_config is not None:
         if isinstance(mongo_config, Mapping):
             mongo_config = MongoConfig(**mongo_config)
-        db_factory = lambda: (
+        db_factory = lambda: (  # noqa
             MongoClient(mongo_config.uri)
             .get_database(mongo_config.db_name)
             .get_collection(mongo_config.collection)

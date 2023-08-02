@@ -3,15 +3,10 @@ from __future__ import annotations
 import collections
 import itertools
 import logging
-import sys
 from typing import Deque, Generator, Iterable, TypeVar
 
 import jax
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec
-else:
-    from typing_extensions import ParamSpec
+from absl_extra.typing_utils import ParamSpec
 
 T = TypeVar("T")
 P = ParamSpec("P")

@@ -3,18 +3,12 @@ from __future__ import annotations
 import functools
 import logging
 import platform
-import sys
 from contextlib import contextmanager
 from typing import Callable, ContextManager, Protocol, Type, TypeVar
 
 import toolz
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec
-else:
-    from typing_extensions import ParamSpec
-
 import tensorflow as tf
+from absl_extra.typing_utils import ParamSpec
 
 T = TypeVar("T")
 P = ParamSpec("P")
