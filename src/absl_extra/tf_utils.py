@@ -67,7 +67,9 @@ class NoOpStrategy:
         yield
 
 
-def make_tpu_strategy() -> StrategyLike:
+def make_tpu_strategy(
+    tpu: str | None = None, experimental_spmd_xla_partitioning: bool = True
+) -> StrategyLike:
     """
     Used for testing locally scripts, which them must run on Colab TPUs. Allows to keep the same scripts,
     without changing strategy assignment.
@@ -93,10 +95,12 @@ def make_tpu_strategy() -> StrategyLike:
         logging.warning("Not running on linux, falling back to NoOpStrategy.")
         return NoOpStrategy()
 
-    tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu)
     tf.config.experimental_connect_to_cluster(tpu)
     tf.tpu.experimental.initialize_tpu_system(tpu)
-    strategy = tf.distribute.TPUStrategy(tpu, experimental_spmd_xla_partitioning=True)
+    strategy = tf.distribute.TPUStrategy(
+        tpu, experimental_spmd_xla_partitioning=experimental_spmd_xla_partitioning
+    )
     return strategy
 
 
@@ -151,6 +155,7 @@ def supports_mixed_precision() -> bool:
     tpus = tf.config.list_logical_devices("TPU")
     if len(tpus) != 0:
         logging.info("Mixed precision OK. You should use mixed_bfloat16 for TPU.")
+        return True
     gpus = tf.config.list_physical_devices("GPU")
     if len(gpus) == 0:
         return False
