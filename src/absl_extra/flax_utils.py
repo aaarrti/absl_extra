@@ -285,22 +285,20 @@ def load_from_msgpack(
 
 
 @jaxtyped
-def fit(
+def fit_single_device(
     *,
     training_state: TS,  # type: ignore
+    metrics_container_type: Type[M],
+    training_step_func: TrainingStep,
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
-    metrics_container_type: Type[M],
-    training_step_func: TrainingStep,  # noqa
-    validation_step_func: ValidationStep,  # noqa
-    hooks: TrainingHooks | None = None,
+    validation_step_func: ValidationStep,
+    
     epochs: int = 1,
     prefetch_buffer_size: int = 2,
-    verbose: bool = False,
+    verbose: bool = True,
+    hooks: TrainingHooks | None = None,
     num_training_steps: int | None = None,
-    skip_shard: bool = False,
-    data_sharding: NamedSharding | None = None,
-    params_replication: NamedSharding | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -329,75 +327,18 @@ def fit(
         Whether to display verbose output during training. Defaults to False.
     num_training_steps:
         Must be provided in cases verbose=True, and dataset is not typing.Sized.
-    skip_shard:
-        If set to True, will skip sharding of data before passing it to training_step_func
-        and validation_step_func. You might want it, in case your train step is decorated
-        with @pad_shard_unpad. Applies only to distributed training.
-    data_sharding:
-        NamesSharding, in case you want more fine-grained control on how data is sharded across devices.
-        Applies only to distributed training.
-    params_replication:
-        NamedSharding, in case you want more fine-grained control on how params are replicated across replicas,
-        e.g., you might want to shard large kernel instead of replicating them (or both).
-
     Returns
     -------
     Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
         A tuple containing the training and validation metrics, and the final training state parameters.
     """
+    
     if epochs <= 0:
         raise InvalidEpochsNumberError(epochs)
 
     if hooks is None:
         hooks = TrainingHooks()
-
-    if jax.device_count() > 0:
-        return _fit_multi_device(
-            training_state=training_state,
-            metrics_container_type=metrics_container_type,
-            training_step_func=training_step_func,
-            training_dataset_factory=training_dataset_factory,
-            validation_dataset_factory=validation_dataset_factory,
-            validation_step_func=validation_step_func,
-            hooks=hooks,
-            epochs=epochs,
-            prefetch_buffer_size=prefetch_buffer_size,
-            verbose=verbose,
-            num_training_steps=num_training_steps,
-            skip_shard=skip_shard,
-            data_sharding=data_sharding,
-            params_replication=params_replication,
-        )
-    else:
-        return _fit_single_device(
-            training_state=training_state,
-            metrics_container_type=metrics_container_type,
-            training_step_func=training_step_func,
-            training_dataset_factory=training_dataset_factory,
-            validation_dataset_factory=validation_dataset_factory,
-            validation_step_func=validation_step_func,
-            hooks=hooks,
-            epochs=epochs,
-            prefetch_buffer_size=prefetch_buffer_size,
-            verbose=verbose,
-            num_training_steps=num_training_steps,
-        )
-
-
-def _fit_single_device(
-    *,
-    training_state: TS,  # type: ignore
-    metrics_container_type: Type[M],
-    training_step_func: TrainingStep,
-    training_dataset_factory: DatasetFactory,
-    validation_dataset_factory: DatasetFactory,
-    validation_step_func: ValidationStep,
-    hooks: TrainingHooks,
-    epochs: int,
-    prefetch_buffer_size: int,
-    verbose: bool,
-    num_training_steps: int | None,
-) -> MetricsAndParams:
+        
     for epoch in range(epochs):
         if verbose:
             logging.info(f"Epoch {epoch + 1}/{epochs}...")
@@ -472,7 +413,7 @@ def _fit_single_device(
     return (training_metrics, validation_metrics), params
 
 
-def _fit_multi_device(
+def fit_multi_device(
     *,
     training_state: TS,  # type: ignore
     metrics_container_type: Type[M],
@@ -480,15 +421,65 @@ def _fit_multi_device(
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     validation_step_func: ValidationStep,
-    hooks: TrainingHooks,
-    epochs: int,
-    prefetch_buffer_size: int,
-    verbose: bool,
-    num_training_steps: int | None,
-    skip_shard: bool,
-    data_sharding: NamedSharding | None,
-    params_replication: NamedSharding | None,
+    hooks: TrainingHooks | None = None,
+    epochs: int = 1,
+    prefetch_buffer_size: int = 2,
+    verbose: bool = False,
+    num_training_steps: int | None = None,
+    skip_shard: bool = False,
+    data_sharding: NamedSharding | None = None,
+    params_replication: NamedSharding | None = None,
 ) -> MetricsAndParams:
+    """
+    Parameters
+    ----------
+    training_state : TS
+        The initial state of the training process.
+    training_dataset_factory : DatasetFactory
+        A factory function that returns the training dataset.
+    validation_dataset_factory : DatasetFactory
+        A factory function that returns the validation dataset.
+    metrics_container_type : Type[M]
+        The type of container to store the metrics.
+    training_step_func : Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
+        A function that performs a single training step. It takes the training state, input data, and target data as inputs,
+        and returns the updated training state and metrics.
+    validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
+        A function that performs a single validation step. It takes the training state, input data, and target data as inputs,
+        and returns the metrics.
+    hooks : List[TrainingHook[TS, M]] | None, optional
+        A list of training hooks to be executed before and after each training step. Defaults to None.
+    epochs : int, optional
+        The number of training epochs. Defaults to 1.
+    prefetch_buffer_size : int, optional
+        The size of the prefetch buffer for loading data. Defaults to 2. Set to 0 for TPU.
+    verbose : bool, optional
+        Whether to display verbose output during training. Defaults to False.
+    num_training_steps:
+        Must be provided in cases verbose=True, and dataset is not typing.Sized.
+    skip_shard:
+        If set to True, will skip sharding of data before passing it to training_step_func
+        and validation_step_func. You might want it, in case your train step is decorated
+        with @pad_shard_unpad. Applies only to distributed training.
+    data_sharding:
+        NamesSharding, in case you want more fine-grained control on how data is sharded across devices.
+        Applies only to distributed training.
+    params_replication:
+        NamedSharding, in case you want more fine-grained control on how params are replicated across replicas,
+        e.g., you might want to shard large kernel instead of replicating them (or both).
+
+    Returns
+    -------
+    Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
+        A tuple containing the training and validation metrics, and the final training state parameters.
+    """
+    
+    if epochs <= 0:
+        raise InvalidEpochsNumberError(epochs)
+
+    if hooks is None:
+        hooks = TrainingHooks()
+    
     # How do we handle batch stats?
     training_state = jax_utils.replicate(training_state)
     if hasattr(training_state, "dropout_key"):
