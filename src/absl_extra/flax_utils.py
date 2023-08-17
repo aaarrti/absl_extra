@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
-import pathlib
 from typing import (
     Any,
     Callable,
@@ -18,6 +17,7 @@ from typing import (
     runtime_checkable,
 )
 
+import tensorflow as tf
 import clu.metric_writers
 import clu.metrics
 import clu.periodic_actions
@@ -286,14 +286,10 @@ def save_as_msgpack(
     None
         This method does not return any value.
     """
-    logging.info(f"Writing {save_path}")
+    logging.debug(f"Saving model to {save_path}")
     msgpack_bytes: bytes = frozen_dict.serialization.to_bytes(params)
 
-    dir_name = save_path.rpartition("/")[0]
-    if dir_name != "":
-        pathlib.Path(dir_name).mkdir(exist_ok=True)
-
-    with open(save_path, "wb+") as file:
+    with tf.io.gfile.GFile(save_path, "wb+") as file:
         file.write(msgpack_bytes)
 
 
@@ -317,9 +313,9 @@ def load_from_msgpack(
         The loaded parameters.
 
     """
-    logging.info(f"Reading {save_path}")
+    logging.debug(f"Loading model from {save_path}")
 
-    with open(save_path, "rb") as file:
+    with tf.io.gfile.GFile(save_path, "rb") as file:
         bytes_data = file.read()
 
     params = frozen_dict.serialization.from_bytes(params, bytes_data)
