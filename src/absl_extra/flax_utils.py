@@ -1,46 +1,43 @@
 from __future__ import annotations
 
+import dataclasses
+import inspect
+import pathlib
 from typing import (
+    Any,
     Callable,
     Dict,
     Iterable,
+    List,
     Protocol,
+    Sequence,
     Tuple,
     Type,
     TypeVar,
     no_type_check,
     runtime_checkable,
-    Sequence,
-    List,
-    Any,
 )
-import dataclasses
+
+import clu.metric_writers
 import clu.metrics
 import clu.periodic_actions
-import clu.metric_writers
 import jax
-from jax.sharding import NamedSharding
 import jax.numpy as jnp
 from absl import logging
 from flax import jax_utils, struct
 from flax.core import frozen_dict
 from flax.training import common_utils, train_state
+from jax.sharding import NamedSharding
 from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
+from absl_extra.dataclass import dataclass
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.keras_pbar import keras_pbar
-from absl_extra.dataclass import dataclass
 
 T = TypeVar("T")
 TS = TypeVar("TS", bound=train_state.TrainState)
-M = TypeVar("M", bound=clu.metrics.Collection)
 S = TypeVar("S", bound=Sequence)
 DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  # noqa
-ValidationStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]  # noqa
-TrainingStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]  # noqa
-MetricsAndParams = Tuple[
-    Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict
-]
 
 
 @runtime_checkable
@@ -141,6 +138,47 @@ class BinaryAccuracy(NanSafeAverage):
         return super().from_model_output(
             values=jnp.asarray(predicted == labels, predicted.dtype)
         )
+
+
+@struct.dataclass
+class AnnotationsCompatibleCollection(clu.metrics.Collection):
+    """
+    clu.metrics.Collection which works with __future__.annotations enbaled.
+    Based on https://github.com/google/CommonLoopUtils/pull/295/files
+    """
+
+    @classmethod
+    def empty(cls) -> AnnotationsCompatibleCollection:
+        return cls(
+            _reduction_counter=clu.metrics._ReductionCounter.empty(),
+            **{
+                metric_name: metric.empty()
+                for metric_name, metric in inspect.get_annotations(
+                    cls, eval_str=True
+                ).items()
+            },
+        )
+
+    @classmethod
+    def _from_model_output(cls, **kwargs) -> AnnotationsCompatibleCollection:
+        """Creates a `Collection` from model outputs."""
+        return cls(
+            _reduction_counter=clu.metrics._ReductionCounter.empty(),
+            **{
+                metric_name: metric.from_model_output(**kwargs)
+                for metric_name, metric in inspect.get_annotations(
+                    cls, eval_str=True
+                ).items()
+            },
+        )
+
+
+M = TypeVar("M", bound=AnnotationsCompatibleCollection)
+ValidationStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
+TrainingStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
+MetricsAndParams = Tuple[
+    Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict
+]
 
 
 class OnStepBegin(Protocol[TS, M]):  # type: ignore
@@ -250,6 +288,11 @@ def save_as_msgpack(
     """
     logging.info(f"Writing {save_path}")
     msgpack_bytes: bytes = frozen_dict.serialization.to_bytes(params)
+
+    dir_name = save_path.rpartition("/")[0]
+    if dir_name != "":
+        pathlib.Path(dir_name).mkdir(exist_ok=True)
+
     with open(save_path, "wb+") as file:
         file.write(msgpack_bytes)
 
@@ -293,7 +336,6 @@ def fit_single_device(
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     validation_step_func: ValidationStep,
-    
     epochs: int = 1,
     prefetch_buffer_size: int = 2,
     verbose: bool = True,
@@ -332,13 +374,13 @@ def fit_single_device(
     Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
         A tuple containing the training and validation metrics, and the final training state parameters.
     """
-    
+
     if epochs <= 0:
         raise InvalidEpochsNumberError(epochs)
 
     if hooks is None:
         hooks = TrainingHooks()
-        
+
     for epoch in range(epochs):
         if verbose:
             logging.info(f"Epoch {epoch + 1}/{epochs}...")
@@ -413,6 +455,7 @@ def fit_single_device(
     return (training_metrics, validation_metrics), params
 
 
+@jaxtyped
 def fit_multi_device(
     *,
     training_state: TS,  # type: ignore
@@ -473,13 +516,13 @@ def fit_multi_device(
     Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
         A tuple containing the training and validation metrics, and the final training state parameters.
     """
-    
+
     if epochs <= 0:
         raise InvalidEpochsNumberError(epochs)
 
     if hooks is None:
         hooks = TrainingHooks()
-    
+
     # How do we handle batch stats?
     training_state = jax_utils.replicate(training_state)
     if hasattr(training_state, "dropout_key"):
@@ -587,9 +630,10 @@ def fit_multi_device(
 def make_training_hooks(
     num_training_steps: int,
     epochs: int,
-    log_frequency: int,
-    logdir: str = "tensorboard",
+    write_metrics_frequency: int | None = None,
+    tensorboard_logdir: str | None = "tensorboard",
     hyperparams_factory: Callable[[], Dict[str, Any]] | None = None,
+    report_progress_frequency: int | None = None,
 ) -> TrainingHooks:
     """
     Create typical training hooks
@@ -602,77 +646,77 @@ def make_training_hooks(
     ----------
     num_training_steps
     epochs
-    log_frequency:
+    write_metrics_frequency:
         Number of times per epoch to write metrics/report progress.
     hyperparams_factory:
         If not None, will write return value as hyperparams at beginning of each epoch to
         use with Tensorboard visualization.
-    logdir:
-        Directory where to write metrics into.
+    tensorboard_logdir:
+        Directory where to write metrics into. If set to None, will not write any tensorboard logs.
+    report_progress_frequency:
+        Number of times per epoc to report progress to stdout, if set to None no progress report will be generated.
 
     Returns
     -------
 
     """
 
+    hooks = TrainingHooks()
+
     training_writer = clu.metric_writers.create_default_writer(
-        logdir=logdir, collection="training"
+        logdir=tensorboard_logdir, collection="training"
     )
     validation_writer = clu.metric_writers.create_default_writer(
-        logdir=logdir, collection="validation"
+        logdir=tensorboard_logdir, collection="validation"
     )
 
-    report_progress = clu.periodic_actions.ReportProgress(
-        on_steps=[1, num_training_steps * epochs],
-        every_steps=num_training_steps // log_frequency,
-        num_train_steps=num_training_steps * epochs,
-        writer=training_writer,
-    )
-
-    def _flush(*args, **kwargs):
+    def flush(*args, **kwargs):
         training_writer.flush()
         validation_writer.flush()
 
-    on_train_begin = []
+    hooks.on_training_end.append(flush)
 
-    if hyperparams_factory is not None:
-        on_train_begin.append(
-            lambda *args, **kwargs: training_writer.write_hparams(hyperparams_factory())  # type: ignore
+    if report_progress_frequency is not None:
+        report_progress = clu.periodic_actions.ReportProgress(
+            on_steps=[1, num_training_steps * epochs],
+            every_steps=num_training_steps // report_progress_frequency,
+            num_train_steps=num_training_steps * epochs,
+            writer=training_writer,
         )
 
-    on_step_begin = [
-        lambda step, *args, **kwargs: report_progress(step),
-    ]
+        def report_progress_func(step: int, *args, **kwargs):
+            report_progress(step)
 
-    on_step_end = [
-        clu.periodic_actions.PeriodicCallback(
-            on_steps=[1, num_training_steps * epochs],
-            every_steps=num_training_steps // log_frequency,
-            callback_fn=lambda step, *args, training_metrics, **kwargs: training_writer.write_scalars(
-                step, training_metrics.compute()
+        hooks.on_epoch_begin.append(report_progress_func)
+
+    if write_metrics_frequency is not None:
+        hooks.on_step_end.append(
+            clu.periodic_actions.PeriodicCallback(
+                on_steps=[1, num_training_steps * epochs],
+                every_steps=num_training_steps // write_metrics_frequency,
+                callback_fn=lambda step, *args, training_metrics, **kwargs: training_writer.write_scalars(
+                    step, training_metrics.compute()
+                ),
             ),
-        ),
-    ]
-
-    on_epoch_end = [
-        UncheckedPeriodicCallback(
-            on_steps=[1, num_training_steps * epochs],
-            every_steps=num_training_steps // log_frequency,
-            callback_fn=lambda step, *args, validation_metrics, **kwargs: validation_writer.write_scalars(
-                step, validation_metrics.compute()
+        )
+        hooks.on_epoch_end.append(
+            UncheckedPeriodicCallback(
+                on_steps=[1, num_training_steps * epochs],
+                every_steps=num_training_steps // write_metrics_frequency,
+                callback_fn=lambda step, *args, validation_metrics, **kwargs: validation_writer.write_scalars(
+                    step, validation_metrics.compute()
+                ),
             ),
-        ),
-    ]
+        )
 
-    on_train_end = [lambda *args, **kwargs: _flush]
+    if hyperparams_factory is not None:
 
-    return TrainingHooks(  # type: ignore
-        on_training_begin=on_train_begin,
-        on_step_begin=on_step_begin,
-        on_epoch_end=on_epoch_end,
-        on_step_end=on_step_end,
-        on_training_end=on_train_end,
-    )
+        def write_hparams(*args, **kwargs):
+            training_writer.write_hparams(hyperparams_factory())
+
+        hooks.on_training_begin.append(write_hparams)
+
+    return hooks
 
 
 def _nan_div(a: float, b: float) -> float:

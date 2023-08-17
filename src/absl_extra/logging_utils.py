@@ -7,8 +7,8 @@ from typing import Callable, Literal, TypeVar
 
 import toolz
 from absl import logging
-from absl_extra.typing_utils import ParamSpec
 
+from absl_extra.typing_utils import ParamSpec
 
 T = TypeVar("T")
 P = ParamSpec("P")

@@ -6,6 +6,7 @@ import logging
 from typing import Deque, Generator, Iterable, TypeVar
 
 import jax
+
 from absl_extra.typing_utils import ParamSpec
 
 T = TypeVar("T")

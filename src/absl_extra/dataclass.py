@@ -1,7 +1,6 @@
-import sys
 import dataclasses
 import functools
-
+import sys
 
 if sys.version_info >= (3, 10):
     dataclass = functools.partial(

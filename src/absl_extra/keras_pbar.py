@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sized, Iterable, TypeVar
+from typing import Iterable, Sized, TypeVar
 
 try:
     from keras_core.utils import Progbar

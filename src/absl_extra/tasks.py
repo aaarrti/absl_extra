@@ -2,21 +2,12 @@ from __future__ import annotations
 
 import functools
 from importlib import util
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Mapping,
-    Protocol,
-    TypeVar,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Protocol, TypeVar
 
 from absl import app, flags, logging
 
-from absl_extra.notifier import BaseNotifier, LoggingNotifier
 from absl_extra.dataclass import dataclass
+from absl_extra.notifier import BaseNotifier, LoggingNotifier
 
 T = TypeVar("T", bound=Callable)
 FLAGS = flags.FLAGS
