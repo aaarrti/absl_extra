@@ -463,11 +463,10 @@ def fit_multi_device(
     hooks: TrainingHooks | None = None,
     epochs: int = 1,
     prefetch_buffer_size: int = 2,
-    verbose: bool = False,
+    verbose: bool = True,
     num_training_steps: int | None = None,
     skip_shard: bool = False,
     data_sharding: NamedSharding | None = None,
-    params_replication: NamedSharding | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -502,10 +501,6 @@ def fit_multi_device(
         with @pad_shard_unpad. Applies only to distributed training.
     data_sharding:
         NamesSharding, in case you want more fine-grained control on how data is sharded across devices.
-        Applies only to distributed training.
-    params_replication:
-        NamedSharding, in case you want more fine-grained control on how params are replicated across replicas,
-        e.g., you might want to shard large kernel instead of replicating them (or both).
 
     Returns
     -------
@@ -579,6 +574,8 @@ def fit_multi_device(
                     training_state=jax_utils.unreplicate(training_state),
                 )
                 if isinstance(hook, EarlyStopping) and hook.should_stop:
+                    if verbose:
+                        logging.info("Stopping early")
                     break
         if verbose:
             logging.info(
@@ -614,6 +611,8 @@ def fit_multi_device(
                 validation_metrics=validation_metrics.unreplicate(),
             )
             if isinstance(hook, EarlyStopping) and hook.should_stop:
+                if verbose:
+                    logging.info("Stopping early")
                 break
 
     params = jax_utils.unreplicate(training_state).params
