@@ -3,7 +3,8 @@ from __future__ import annotations
 import functools
 import inspect
 from importlib import util
-from typing import Callable, Literal, TypeVar
+from typing import Callable, Literal, TypeVar, Sequence
+from types import MethodType, FunctionType
 
 import toolz
 from absl import logging
@@ -16,21 +17,47 @@ P = ParamSpec("P")
 
 @toolz.curry
 def log_exception(
-    func: Callable[P, T], logger: Callable[[str], None] = logging.error
+    func: Callable[P, T],
+    logger: Callable[[str], None] = logging.error,
+    ignore_argnums: Sequence[int] | None = None,
+    ignore_argnames: Sequence[str] | None = None,
 ) -> Callable[P, T]:
     """Log raised exception, and argument which caused it."""
+
+    if ignore_argnums is None:
+        ignore_argnums = ()
+
+    if ignore_argnames is None:
+        ignore_argnames = ()
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
-        func_args_str = ", ".join(map("{0[0]} = {0[1]!r}".format, func_args.items()))
+
+        filtered_kwargs = {}
+
+        for i, (k, v) in enumerate(func_args.items()):
+            if i not in ignore_argnums and k not in ignore_argnames:
+                filtered_kwargs[k] = v
+
+        func_args_str = ", ".join(
+            map("{0[0]} = {0[1]!r}".format, filtered_kwargs.items())
+        )
 
         try:
             return func(*args, **kwargs)
         except Exception as ex:
-            logger(
-                f"{func.__module__}.{func.__qualname__} with args ( {func_args_str} ) raised {ex}"
-            )
+            if inspect.isfunction(func):
+                _func: FunctionType = func
+                logger(
+                    f"{_func.__module__}.{_func.__qualname__} with args ( {func_args_str} ) raised {ex}"
+                )
+            elif inspect.ismethod(func):
+                _method: MethodType = func
+                logger(
+                    f"{_method.__module__}.{_method.__class__}.{_method.__qualname__} with args ( {func_args_str} ) raised {ex}"
+                )
+
             raise ex
 
     return wrapper

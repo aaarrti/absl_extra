@@ -16,7 +16,7 @@ from typing import (
     no_type_check,
     runtime_checkable,
 )
-
+import functools
 import tensorflow as tf
 import clu.metric_writers
 import clu.metrics
@@ -33,7 +33,10 @@ from jaxtyping import Array, Float, Int, Int32, jaxtyped
 from absl_extra.dataclass import dataclass
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.keras_pbar import keras_pbar
+from absl_extra.typing_utils import ParamSpec
+from absl_extra.logging_utils import log_exception
 
+P = ParamSpec("P")
 T = TypeVar("T")
 TS = TypeVar("TS", bound=train_state.TrainState)
 S = TypeVar("S", bound=Sequence)
@@ -54,6 +57,7 @@ class NanSafeAverage(clu.metrics.Average):
             return 0
 
 
+@jaxtyped
 @struct.dataclass
 class F1Score(clu.metrics.Metric):
     """
@@ -123,6 +127,7 @@ class F1Score(clu.metrics.Metric):
         return f1_score
 
 
+@jaxtyped
 @struct.dataclass
 class BinaryAccuracy(NanSafeAverage):
     @classmethod
@@ -206,10 +211,8 @@ class OnTrainingBegin(Protocol[TS, M]):  # type: ignore
         self,
         step: int,
         *,
-        training_metrics: M,  # type: ignore
-        validation_metrics: M,  # type: ignore
         training_state: TS,  # type: ignore
-    ) -> None:  # type: ignore
+    ) -> None | TS:  # type: ignore
         ...
 
 
@@ -225,6 +228,7 @@ class OnTrainingEnd(Protocol[TS, M]):  # type: ignore
         ...
 
 
+@jaxtyped
 @dataclass
 class TrainingHooks:
     on_epoch_begin: List[OnEpochBegin] = dataclasses.field(default_factory=list)
@@ -233,6 +237,16 @@ class TrainingHooks:
     on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
     on_training_begin: List[OnTrainingBegin] = dataclasses.field(default_factory=list)
     on_training_end: List[OnTrainingEnd] = dataclasses.field(default_factory=list)
+
+    def wrap_hooks(self, decorator: Callable[[Callable[P, T]], Callable[P, T]]):
+        return TrainingHooks(
+            on_training_begin=[decorator(i) for i in self.on_training_begin],
+            on_training_end=[decorator(i) for i in self.on_training_end],
+            on_epoch_begin=[decorator(i) for i in self.on_epoch_begin],
+            on_epoch_end=[decorator(i) for i in self.on_epoch_end],
+            on_step_begin=[decorator(i) for i in self.on_step_begin],
+            on_step_end=[decorator(i) for i in self.on_step_end],
+        )
 
 
 class UncheckedReportProgress(clu.periodic_actions.ReportProgress):
@@ -270,6 +284,7 @@ class InvalidEpochsNumberError(RuntimeError):
         super().__init__(f"Epochs must be greater than 0, but found {value}")
 
 
+@log_exception(ignore_argnames="params")
 def save_as_msgpack(
     params: frozen_dict.FrozenDict, save_path: str = "model.msgpack"
 ) -> None:
@@ -293,6 +308,7 @@ def save_as_msgpack(
         file.write(msgpack_bytes)
 
 
+@log_exception(ignore_argnames="params")
 def load_from_msgpack(
     params: frozen_dict.FrozenDict, save_path: str = "model.msgpack"
 ) -> frozen_dict.FrozenDict:
@@ -377,6 +393,14 @@ def fit_single_device(
     if hooks is None:
         hooks = TrainingHooks()
 
+    current_step = None
+    for hook in hooks.on_training_begin:
+        loaded_state = hook(int(training_state.step), training_state=training_state)
+        if loaded_state is not None:
+            logging.info("Loaded saved training state.")
+            training_state = loaded_state
+            current_step = 0
+
     for epoch in range(epochs):
         if verbose:
             logging.info(f"Epoch {epoch + 1}/{epochs}...")
@@ -394,6 +418,11 @@ def fit_single_device(
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
+            if current_step is not None and current_step < int(current_step):
+                # Fast-forward reloaded steps
+                current_step += 1
+                continue
+
             for hook in hooks.on_step_begin:
                 hook(int(training_state.step))
 
