@@ -393,6 +393,8 @@ def fit_single_device(
     if hooks is None:
         hooks = TrainingHooks()
 
+    hooks = hooks.wrap_hooks(log_exception)
+
     current_step = None
     for hook in hooks.on_training_begin:
         loaded_state = hook(int(training_state.step), training_state=training_state)
