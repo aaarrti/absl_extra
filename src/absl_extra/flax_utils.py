@@ -413,7 +413,9 @@ def fit_single_device(
         training_dataset = training_dataset_factory()
 
         if prefetch_buffer_size != 0:
-            training_dataset = prefetch_to_device(training_dataset, prefetch_buffer_size)
+            training_dataset = prefetch_to_device(
+                training_dataset, prefetch_buffer_size
+            )
 
         if verbose:
             training_dataset = keras_pbar(training_dataset, n=num_training_steps)
