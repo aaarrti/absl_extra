@@ -473,6 +473,7 @@ def fit_single_device(
                 validation_metrics=validation_metrics,
             )
             if isinstance(hook, EarlyStopping) and hook.should_stop:
+                logging.info("Stopping early")
                 break
 
     params = training_state.params
@@ -497,7 +498,6 @@ def fit_multi_device(
     verbose: bool = True,
     num_training_steps: int | None = None,
     skip_shard: bool = False,
-    data_sharding: NamedSharding | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -545,7 +545,8 @@ def fit_multi_device(
     if hooks is None:
         hooks = TrainingHooks()
 
-    # How do we handle batch stats?
+    hooks = hooks.wrap_hooks(log_exception)
+
     training_state = jax_utils.replicate(training_state)
     if hasattr(training_state, "dropout_key"):
         training_state.replace(
@@ -557,16 +558,22 @@ def fit_multi_device(
     def step_number():
         return int(jax_utils.unreplicate(training_state.step))
 
-    def shard_x_y(x, y):
-        if not skip_shard:
-            if data_sharding is not None:
-                x = jax.device_put(x, data_sharding)
-                y = jax.device_put(y, data_sharding)
-            else:
-                x = common_utils.shard(x)
-                y = common_utils.shard(y)
+    def shard_x_y(ds: Iterable[Tuple]):
+        if skip_shard:
+            return ds
+        for x, y in ds:
+            x = common_utils.shard(x)
+            y = common_utils.shard(y)
+            yield x, y
 
-        return x, y
+    # maybe restore training state
+    current_step = None
+    for hook in hooks.on_training_begin:
+        loaded_state = hook(int(training_state.step), training_state=training_state)
+        if loaded_state is not None:
+            logging.info("Loaded saved training state.")
+            training_state = loaded_state
+            current_step = 0
 
     for epoch in range(epochs):
         if verbose:
@@ -575,7 +582,7 @@ def fit_multi_device(
         for hook in hooks.on_epoch_begin:
             hook(step_number())
 
-        training_dataset = training_dataset_factory()
+        training_dataset = shard_x_y(training_dataset_factory())
         if prefetch_buffer_size != 0:
             training_dataset = jax_utils.prefetch_to_device(
                 training_dataset, prefetch_buffer_size
@@ -587,7 +594,10 @@ def fit_multi_device(
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
-            x_batch, y_batch = shard_x_y(x_batch, y_batch)
+            if current_step is not None and current_step < int(current_step):
+                # Fast-forward reloaded steps
+                current_step += 1
+                continue
 
             for hook in hooks.on_step_begin:
                 hook(step_number())
@@ -605,8 +615,7 @@ def fit_multi_device(
                     training_state=jax_utils.unreplicate(training_state),
                 )
                 if isinstance(hook, EarlyStopping) and hook.should_stop:
-                    if verbose:
-                        logging.info("Stopping early")
+                    logging.info("Stopping early")
                     break
         if verbose:
             logging.info(
@@ -614,7 +623,7 @@ def fit_multi_device(
                 for k, v in training_metrics.unreplicate().compute().items()
             )
 
-        validation_dataset = validation_dataset_factory()
+        validation_dataset = shard_x_y(validation_dataset_factory())
         if prefetch_buffer_size != 0:
             validation_dataset = jax_utils.prefetch_to_device(
                 validation_dataset, prefetch_buffer_size
@@ -623,7 +632,6 @@ def fit_multi_device(
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            x_batch, y_batch = shard_x_y(x_batch, y_batch)
             validation_metrics_i = validation_step_func(
                 training_state, x_batch, y_batch
             )
@@ -642,8 +650,7 @@ def fit_multi_device(
                 validation_metrics=validation_metrics.unreplicate(),
             )
             if isinstance(hook, EarlyStopping) and hook.should_stop:
-                if verbose:
-                    logging.info("Stopping early")
+                logging.info("Stopping early")
                 break
 
     params = jax_utils.unreplicate(training_state).params
