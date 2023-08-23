@@ -16,25 +16,24 @@ from typing import (
     no_type_check,
     runtime_checkable,
 )
-import functools
-import tensorflow as tf
+
 import clu.metric_writers
 import clu.metrics
 import clu.periodic_actions
 import jax
 import jax.numpy as jnp
+import tensorflow as tf
 from absl import logging
 from flax import jax_utils, struct
 from flax.core import frozen_dict
 from flax.training import common_utils, train_state
-from jax.sharding import NamedSharding
 from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
 from absl_extra.dataclass import dataclass
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.keras_pbar import keras_pbar
-from absl_extra.typing_utils import ParamSpec
 from absl_extra.logging_utils import log_exception
+from absl_extra.typing_utils import ParamSpec
 
 P = ParamSpec("P")
 T = TypeVar("T")

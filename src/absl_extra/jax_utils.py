@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import collections
 import itertools
-import logging
 from typing import Deque, Generator, Iterable, TypeVar
 
 import jax
@@ -43,10 +42,6 @@ def prefetch_to_device(
     """
     queue: Deque[T] = collections.deque()
     devices = jax.devices()
-    if devices[0].device_kind != "gpu":
-        logging.error("Prefetch must be used only with GPU")
-        for i in iterator:
-            yield i
 
     if len(devices) > 1:
         raise ValueError(
