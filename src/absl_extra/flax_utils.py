@@ -402,7 +402,11 @@ def fit_single_device(
             training_state = loaded_state
             current_step = 0
 
+    should_stop = False
     for epoch in range(epochs):
+        if should_stop:
+            break
+
         if verbose:
             logging.info(f"Epoch {epoch + 1}/{epochs}...")
 
@@ -441,6 +445,8 @@ def fit_single_device(
                     training_state=training_state,  # type: ignore
                 )
                 if isinstance(hook, EarlyStopping) and hook.should_stop:
+                    logging.info("Stopping early")
+                    should_stop = True
                     break
         if verbose:
             logging.info(
@@ -475,6 +481,7 @@ def fit_single_device(
             )
             if isinstance(hook, EarlyStopping) and hook.should_stop:
                 logging.info("Stopping early")
+                should_stop = True
                 break
 
     params = training_state.params
@@ -576,7 +583,12 @@ def fit_multi_device(
             training_state = loaded_state
             current_step = 0
 
+    should_stop = False
+
     for epoch in range(epochs):
+        if should_stop:
+            break
+
         if verbose:
             logging.info(f"Epoch {epoch + 1}/{epochs}...")
 
@@ -617,6 +629,7 @@ def fit_multi_device(
                 )
                 if isinstance(hook, EarlyStopping) and hook.should_stop:
                     logging.info("Stopping early")
+                    should_stop = True
                     break
         if verbose:
             logging.info(
@@ -652,6 +665,7 @@ def fit_multi_device(
             )
             if isinstance(hook, EarlyStopping) and hook.should_stop:
                 logging.info("Stopping early")
+                should_stop = True
                 break
 
     params = jax_utils.unreplicate(training_state).params
@@ -735,7 +749,7 @@ def make_training_hooks(
         )
         hooks.on_epoch_end.append(
             UncheckedPeriodicCallback(
-                on_steps=[1, num_training_steps * epochs],
+                on_steps=[num_training_steps * epochs],
                 every_steps=num_training_steps // write_metrics_frequency,
                 callback_fn=lambda step, *args, validation_metrics, **kwargs: validation_writer.write_scalars(
                     step, validation_metrics.compute()
