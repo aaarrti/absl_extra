@@ -406,7 +406,6 @@ def fit_single_device(
     for epoch in range(epochs):
         if should_stop:
             break
-        
 
         for hook in hooks.on_epoch_begin:
             hook(int(training_state.step))
@@ -419,7 +418,11 @@ def fit_single_device(
             )
 
         if verbose:
-            training_dataset = tqdm(training_dataset, total=num_training_steps, desc=f"Epoch {epoch + 1}/{epochs}")
+            training_dataset = tqdm(
+                training_dataset,
+                total=num_training_steps,
+                desc=f"Epoch {epoch + 1}/{epochs}",
+            )
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
@@ -595,7 +598,11 @@ def fit_multi_device(
             )
 
         if verbose:
-            training_dataset = tqdm(training_dataset, total=num_training_steps, desc=f"Epoch {epoch + 1}/{epochs}...")
+            training_dataset = tqdm(
+                training_dataset,
+                total=num_training_steps,
+                desc=f"Epoch {epoch + 1}/{epochs}...",
+            )
 
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
