@@ -721,7 +721,7 @@ def make_training_hooks(
         def report_progress_func(step: int, *args, **kwargs):
             report_progress(step)
 
-        hooks.on_epoch_begin.append(report_progress_func)
+        hooks.on_step_end.append(report_progress_func)
 
     if write_metrics_frequency is not None:
         hooks.on_step_end.append(
