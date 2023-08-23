@@ -17,6 +17,7 @@ from typing import (
     runtime_checkable,
 )
 
+from tqdm.auto import tqdm
 import clu.metric_writers
 import clu.metrics
 import clu.periodic_actions
@@ -31,7 +32,6 @@ from jaxtyping import Array, Float, Int, Int32, jaxtyped
 
 from absl_extra.dataclass import dataclass
 from absl_extra.jax_utils import prefetch_to_device
-from absl_extra.keras_pbar import keras_pbar
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
@@ -406,9 +406,7 @@ def fit_single_device(
     for epoch in range(epochs):
         if should_stop:
             break
-
-        if verbose:
-            logging.info(f"Epoch {epoch + 1}/{epochs}...")
+        
 
         for hook in hooks.on_epoch_begin:
             hook(int(training_state.step))
@@ -421,7 +419,7 @@ def fit_single_device(
             )
 
         if verbose:
-            training_dataset = keras_pbar(training_dataset, n=num_training_steps)
+            training_dataset = tqdm(training_dataset, total=num_training_steps, desc=f"Epoch {epoch + 1}/{epochs}")
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
@@ -538,8 +536,6 @@ def fit_multi_device(
         If set to True, will skip sharding of data before passing it to training_step_func
         and validation_step_func. You might want it, in case your train step is decorated
         with @pad_shard_unpad. Applies only to distributed training.
-    data_sharding:
-        NamesSharding, in case you want more fine-grained control on how data is sharded across devices.
 
     Returns
     -------
@@ -589,9 +585,6 @@ def fit_multi_device(
         if should_stop:
             break
 
-        if verbose:
-            logging.info(f"Epoch {epoch + 1}/{epochs}...")
-
         for hook in hooks.on_epoch_begin:
             hook(step_number())
 
@@ -602,7 +595,7 @@ def fit_multi_device(
             )
 
         if verbose:
-            training_dataset = keras_pbar(training_dataset, n=num_training_steps)
+            training_dataset = tqdm(training_dataset, total=num_training_steps, desc=f"Epoch {epoch + 1}/{epochs}...")
 
         training_metrics = jax_utils.replicate(metrics_container_type.empty())
 
