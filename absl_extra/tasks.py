@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import functools
 from importlib import util
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Protocol, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Protocol,
+    TypeVar,
+    NamedTuple,
+    overload,
+)
 
+import toolz
 from absl import app, flags, logging
 
-from absl_extra.dataclass import dataclass
 from absl_extra.notifier import BaseNotifier, LoggingNotifier
 
 T = TypeVar("T", bound=Callable)
@@ -30,8 +41,7 @@ if TYPE_CHECKING:
     from absl_extra.callbacks import CallbackFn
 
 
-@dataclass
-class MongoConfig:
+class MongoConfig(NamedTuple):
     uri: str
     db_name: str
     collection: str
@@ -61,7 +71,8 @@ class NonExistentTaskError(RuntimeError):
         )
 
 
-def _make_task_func(
+@toolz.curry
+def make_task_func(
     func: _TaskFn,
     *,
     name: str,
@@ -91,17 +102,46 @@ def _make_task_func(
     return wrapper
 
 
+@overload
 def register_task(
+    func: Callable[[Collection], None],
+    *,
+    notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
+    mongo_config: MongoConfig | Mapping[str, Any],
+    init_callbacks: List[CallbackFn] | None = None,
+    post_callbacks: List[CallbackFn] | None = None,
+) -> Callable[[Callable[[Collection], None]], _TaskFn]:
+    pass
+
+
+@overload
+def register_task(
+    func: Callable[[], None],
+    *,
+    notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
+    mongo_config: None,
+    init_callbacks: List[CallbackFn] | None = None,
+    post_callbacks: List[CallbackFn] | None = None,
+) -> Callable[[Callable[[], None]], _TaskFn]:
+    pass
+
+
+@toolz.curry
+def register_task(
+    func: Callable[[Collection], None] | Callable[[], None],
     *,
     name: str = "main",
     notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
     mongo_config: MongoConfig | Mapping[str, Any] | None = None,
     init_callbacks: List[CallbackFn] | None = None,
     post_callbacks: List[CallbackFn] | None = None,
-) -> Callable[[_TaskFn], None]:
+) -> Callable[[Callable[[Collection], None] | Callable[[], None]], _TaskFn]:
     """
     Parameters
     ----------
+
+    func:
+        Function to execute.
     name : str, optional
         The name of the task. Default is "main".
     notifier : BaseNotifier | Callable[[], BaseNotifier] | None, optional
@@ -143,17 +183,15 @@ def register_task(
     if post_callbacks is None:
         post_callbacks = DEFAULT_POST_CALLBACK  # type: ignore
 
-    def decorator(func: _TaskFn) -> None:
-        _TASK_STORE[name] = functools.partial(  # type: ignore
-            _make_task_func,
-            name=name,
-            notifier=notifier,
-            init_callbacks=init_callbacks,
-            post_callbacks=post_callbacks,
-            **kwargs,
-        )(func)
+    _TASK_STORE[name] = make_task_func(
+        name=name,
+        notifier=notifier,
+        init_callbacks=init_callbacks,
+        post_callbacks=post_callbacks,
+        **kwargs,
+    )(func)
 
-    return decorator
+    return _TASK_STORE[name]
 
 
 def run(argv: List[str] | None = None, **kwargs):
