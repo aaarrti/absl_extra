@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import collections
 import itertools
-from typing import Deque, Generator, Iterable, TypeVar, Callable
+from typing import Deque, Generator, Iterable, TypeVar
 
 import jax
-from jaxtyping import PyTree, ArrayLike
 
 from absl_extra.typing_utils import ParamSpec
 
@@ -60,14 +59,3 @@ def prefetch_to_device(
     while queue:
         yield queue.popleft()
         enqueue(1)
-
-
-def conditional_tree_map(pytree: PyTree, map_fn: Callable, filter_fn: Callable[[...], bool]) -> PyTree:
-    
-    def cond_map_fn(node: ArrayLike) -> ArrayLike:
-        if filter_fn(node):
-            return map_fn(node)
-        else:
-            return node
-    
-    return jax.tree_util.tree_map(cond_map_fn, pytree)

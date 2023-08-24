@@ -102,6 +102,7 @@ def make_task_func(
     return wrapper
 
 
+@toolz.curry
 @overload
 def register_task(
     func: Callable[[Collection], None],
@@ -111,9 +112,10 @@ def register_task(
     init_callbacks: List[CallbackFn] | None = None,
     post_callbacks: List[CallbackFn] | None = None,
 ) -> Callable[[Callable[[Collection], None]], _TaskFn]:
-    pass
+    ...
 
 
+@toolz.curry
 @overload
 def register_task(
     func: Callable[[], None],
@@ -123,7 +125,7 @@ def register_task(
     init_callbacks: List[CallbackFn] | None = None,
     post_callbacks: List[CallbackFn] | None = None,
 ) -> Callable[[Callable[[], None]], _TaskFn]:
-    pass
+    ...
 
 
 @toolz.curry

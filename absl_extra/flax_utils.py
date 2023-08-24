@@ -117,10 +117,10 @@ class F1Score(clu.metrics.Metric):
         )
 
     def compute(self) -> float:
-        precision = _nan_div(
+        precision = nan_div(
             self.true_positive, self.true_positive + self.false_positive
         )
-        recall = _nan_div(self.true_positive, self.true_positive + self.false_negative)
+        recall = nan_div(self.true_positive, self.true_positive + self.false_negative)
 
         # Ensure we don't divide by zero if both precision and recall are zero
         if precision + recall == 0:
@@ -173,6 +173,11 @@ class AnnotationsCompatibleCollection(clu.metrics.Collection):
             **{metric_name: metric.from_model_output(**kwargs) for metric_name, metric in inspect.get_annotations(cls, eval_str=True).items()} # noqa
             # fmt: on
         )
+    
+    def as_dict(self, prefix: str | None = None) -> Dict[str, float]:
+        metrics = self.compute()
+        return {k: float(v) for k, v in metrics.items()}
+        
 
 
 M = TypeVar("M", bound=AnnotationsCompatibleCollection)
@@ -415,7 +420,7 @@ def fit_single_device(
     current_step = None
     for hook in hooks.on_training_begin:
         loaded_state = hook(int(state.step), training_state=state)
-        if loaded_state is not None:
+        if isinstance(loaded_state, train_state.TrainState):
             logging.info("Loaded saved training state.")
             state = loaded_state
             current_step = 0
@@ -569,17 +574,8 @@ def fit_multi_device(
         hooks = TrainingHooks()
 
     hooks = hooks.wrap_hooks(log_exception)
-
-    state = jax_utils.replicate(state)
-    if hasattr(state, "dropout_key"):
-        state.replace(
-            dropout_key=common_utils.shard_prng_key(
-                jax_utils.unreplicate(state.dropout_key)
-            )
-        )
-
-    def step_number():
-        return int(jax_utils.unreplicate(state.step))
+    
+    state = replicate_state(state)
 
     def shard_x_y(ds: Iterable[Tuple]):
         if skip_shard:
@@ -592,12 +588,12 @@ def fit_multi_device(
     # maybe restore training state
     current_step = None
     for hook in hooks.on_training_begin:
-        loaded_state = hook(int(state.step), training_state=state)
-        if loaded_state is not None:
+        loaded_state = hook(step_number(state), training_state=state)
+        if isinstance(loaded_state, train_state.TrainState):
             logging.info("Loaded saved training state.")
-            state = loaded_state
+            state = replicate_state(loaded_state)
             current_step = 0
-
+    
     should_stop = False
 
     for epoch in range(epochs):
@@ -605,7 +601,7 @@ def fit_multi_device(
             break
 
         for hook in hooks.on_epoch_begin:
-            hook(step_number())
+            hook(step_number(state))
 
         training_dataset = shard_x_y(training_dataset_factory())
         if prefetch_buffer_size != 0:
@@ -629,7 +625,7 @@ def fit_multi_device(
                 continue
 
             for hook in hooks.on_step_begin:
-                hook(step_number())
+                hook(step_number(state))
 
             with hooks.catch_error(state, x_batch, y_batch, "training"):
                 state, training_metrics_i = training_step_func(state, x_batch, y_batch)
@@ -638,7 +634,7 @@ def fit_multi_device(
 
             for hook in hooks.on_step_end:
                 hook(
-                    step_number(),
+                    step_number(state),
                     training_metrics=training_metrics.unreplicate(),
                     training_state=jax_utils.unreplicate(state),
                 )
@@ -673,7 +669,7 @@ def fit_multi_device(
 
         for hook in hooks.on_epoch_end:
             hook(
-                step_number(),
+                step_number(state),
                 training_state=jax_utils.unreplicate(state),
                 validation_metrics=validation_metrics.unreplicate(),
             )
@@ -783,8 +779,23 @@ def make_training_hooks(
     return hooks
 
 
-def _nan_div(a: float, b: float) -> float:
+def nan_div(a: float, b: float) -> float:
     if b == 0:
         return 0
     else:
         return a / b
+
+
+def replicate_state(state: TS) -> TS:
+    state = jax_utils.replicate(state)
+    if hasattr(state, "dropout_key"):
+        state.replace(
+            dropout_key=common_utils.shard_prng_key(
+                jax_utils.unreplicate(state.dropout_key)
+            )
+        )
+    return state
+
+
+def step_number(state: TS):
+    return int(jax_utils.unreplicate(state.step))
