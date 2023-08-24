@@ -28,7 +28,7 @@ from flax import jax_utils
 from flax.core import frozen_dict
 from flax.struct import dataclass
 from flax.training import common_utils, train_state
-from jaxtyping import Array, Int, jaxtyped, PyTree
+from jaxtyping import Array, Int, jaxtyped, PyTree, PRNGKeyArray
 from tqdm.auto import tqdm
 
 from absl_extra.clu_utils import AnnotationsCompatibleCollection, UncheckedPeriodicCallback
@@ -46,6 +46,11 @@ DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]
 @runtime_checkable
 class EarlyStopping(Protocol):
     should_stop: bool
+
+
+@runtime_checkable
+class TrainingStateWithDropout(Protocol):
+    dropout_key: PRNGKeyArray
 
 
 class InvalidEpochsNumberError(RuntimeError):
@@ -131,7 +136,7 @@ class TrainingHooks:
             if isinstance(retval, train_state.TrainState):
                 if reloaded_state is not None:
                     raise RuntimeError("Only one reloaded state is allowed.")
-                reloaded_state = reloaded_state
+                reloaded_state = retval
 
         return reloaded_state
 
@@ -400,7 +405,7 @@ def fit_multi_device(
     if hooks is None:
         hooks = TrainingHooks()
 
-    state = replicate_state(state)
+    
 
     def shard_x_y(ds: Iterable[Tuple]):
         if skip_shard:
@@ -415,8 +420,11 @@ def fit_multi_device(
     loaded_state = hooks.call_on_training_begin(state)
     if isinstance(loaded_state, train_state.TrainState):
         logging.info("Loaded saved training state.")
-        state = replicate_state(loaded_state)
+        state = loaded_state
         current_step = 0
+    
+    
+    state = replicate_state(state)
 
     should_stop = False
     training_metrics = jax_utils.replicate(metrics_container_type.empty())
@@ -446,7 +454,7 @@ def fit_multi_device(
 
             hooks.call_on_step_begin(step_number(state))
 
-            with hooks.catch_error(state, x_batch, y_batch, "training"):
+            with hooks.catch_error(jax_utils.unreplicate(state), x_batch, y_batch, "training"):
                 state, training_metrics_i = training_step_func(state, x_batch, y_batch)
 
             training_metrics = training_metrics.merge(training_metrics_i)
@@ -477,7 +485,7 @@ def fit_multi_device(
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            with hooks.catch_error(state, x_batch, y_batch, "validation"):
+            with hooks.catch_error(jax_utils.unreplicate(state), x_batch, y_batch, "validation"):
                 validation_metrics_i = validation_step_func(state, x_batch, y_batch)
             validation_metrics = validation_metrics.merge(validation_metrics_i)
 
@@ -488,7 +496,7 @@ def fit_multi_device(
             epoch, training_state=jax_utils.unreplicate(state), validation_metrics=validation_metrics.unreplicate()
         )
 
-    hooks.call_on_training_end(state)
+    hooks.call_on_training_end(jax_utils.unreplicate(state))
     params = jax_utils.unreplicate(state).params
     training_metrics = training_metrics.unreplicate().compute()
     validation_metrics = validation_metrics.unreplicate().compute()
