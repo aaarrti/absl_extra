@@ -119,14 +119,11 @@ class TrainingHooks:
             hook(step)
 
     def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS) -> bool:
-        should_stop = None
+        should_stop = False
         for hook in self.on_step_end:
             hook(step, training_metrics=training_metrics, training_state=training_state)
             if isinstance(hook, EarlyStopping):
-                if should_stop is not None:
-                    raise RuntimeError("Only one EarlyStopping is allowed")
-                should_stop = hook.should_stop
-
+                should_stop = should_stop or hook.should_stop
         return should_stop
 
     def call_on_training_begin(self, training_state: TS) -> TS | None:

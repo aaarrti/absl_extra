@@ -54,7 +54,7 @@ def log_exception(
             func_args = inspect.signature(func).bind(*args, **kwargs).arguments
             func_args_str = format_callable_args(func_args, ignore_argnums, ignore_argnames)
             logger(f"{func_name} with args ( {func_args_str} ) raised {format_exception(ex)}")
-            raise ex
+            raise
 
     return wrapper
 
