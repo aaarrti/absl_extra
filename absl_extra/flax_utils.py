@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-import inspect
+from contextlib import contextmanager
 from typing import (
     Any,
     Callable,
@@ -13,28 +13,25 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    no_type_check,
     runtime_checkable,
     ContextManager,
     Literal,
+    Optional,
 )
-from contextlib import contextmanager
 
-from tqdm.auto import tqdm
 import clu.metric_writers
 import clu.metrics
 import clu.periodic_actions
-import jax
-import jax.numpy as jnp
 import tensorflow as tf
 from absl import logging
-from flax import jax_utils, struct
+from flax import jax_utils
 from flax.core import frozen_dict
 from flax.struct import dataclass
 from flax.training import common_utils, train_state
-from jaxtyping import Array, Float, Int, Int32, jaxtyped, PyTree
+from jaxtyping import Array, Int, jaxtyped, PyTree
+from tqdm.auto import tqdm
 
-
+from absl_extra.clu_utils import AnnotationsCompatibleCollection, UncheckedPeriodicCallback
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
@@ -43,7 +40,7 @@ P = ParamSpec("P")
 T = TypeVar("T")
 TS = TypeVar("TS", bound=train_state.TrainState)
 S = TypeVar("S", bound=Sequence)
-DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]  # noqa
+DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]
 
 
 @runtime_checkable
@@ -51,209 +48,96 @@ class EarlyStopping(Protocol):
     should_stop: bool
 
 
-@struct.dataclass
-class NanSafeAverage(clu.metrics.Average):
-    def compute(self) -> float:
-        if self.count != 0:
-            return super().compute()
-        else:
-            return 0
-
-
-@jaxtyped
-@struct.dataclass
-class F1Score(clu.metrics.Metric):
-    """
-    Class F1Score
-    This class represents the F1 Score metric for evaluating classification models.
-
-    - A model will obtain a high F1 score if both Precision and Recall are high.
-    - A model will obtain a low F1 score if both Precision and Recall are low.
-    - A model will obtain a medium F1 score if one of Precision and Recall is low and the other is high.
-    - Precision: Precision is a measure of how many of the positively classified examples were actually positive.
-    - Recall (also called Sensitivity or True Positive Rate): Recall is a measure of how many of the actual positive
-    examples were correctly labeled by the classifier.
-
-    """
-
-    true_positive: Float[Array, "1"]
-    false_positive: Float[Array, "1"]
-    false_negative: Float[Array, "1"]
-
-    @classmethod
-    def from_model_output(
-        cls,
-        *,
-        logits: Float[Array, "batch classes"],  # noqa
-        labels: Int32[Array, "batch classes"],  # noqa
-        threshold: float = 0.5,
-        **kwargs,
-    ) -> F1Score:
-        probs = jax.nn.sigmoid(logits)
-        predicted = jnp.asarray(probs >= threshold, labels.dtype)
-        true_positive = jnp.sum((predicted == 1) & (labels == 1))
-        false_positive = jnp.sum((predicted == 1) & (labels == 0))
-        false_negative = jnp.sum((predicted == 0) & (labels == 1))
-
-        return F1Score(
-            true_positive=true_positive,
-            false_positive=false_positive,
-            false_negative=false_negative,
-        )
-
-    def merge(self, other: "F1Score") -> "F1Score":
-        return F1Score(
-            true_positive=self.true_positive + other.true_positive,
-            false_positive=self.false_positive + other.false_positive,
-            false_negative=self.false_negative + other.false_negative,
-        )
-
-    @classmethod
-    def empty(cls) -> "F1Score":
-        return F1Score(
-            true_positive=0,
-            false_positive=0,
-            false_negative=0,
-        )
-
-    def compute(self) -> float:
-        precision = nan_div(
-            self.true_positive, self.true_positive + self.false_positive
-        )
-        recall = nan_div(self.true_positive, self.true_positive + self.false_negative)
-
-        # Ensure we don't divide by zero if both precision and recall are zero
-        if precision + recall == 0:
-            return 0.0
-
-        f1_score = 2 * (precision * recall) / (precision + recall)
-        return f1_score
-
-
-@jaxtyped
-@struct.dataclass
-class BinaryAccuracy(NanSafeAverage):
-    @classmethod
-    def from_model_output(  # noqa
-        cls,
-        *,
-        logits: Float[Array, "batch classes"],  # noqa
-        labels: Int32[Array, "batch classes"],  # noqa
-        threshold: float = 0.5,
-        **kwargs,
-    ) -> BinaryAccuracy:
-        predicted = jnp.asarray(logits >= threshold, logits.dtype)
-        return super().from_model_output(
-            values=jnp.asarray(predicted == labels, predicted.dtype)
-        )
-
-
-@struct.dataclass
-class AnnotationsCompatibleCollection(clu.metrics.Collection):
-    """
-    clu.metrics.Collection which works with __future__.annotations enbaled.
-    Based on https://github.com/google/CommonLoopUtils/pull/295/files
-    """
-
-    @classmethod
-    def empty(cls) -> AnnotationsCompatibleCollection:
-        return cls(
-            _reduction_counter=clu.metrics._ReductionCounter.empty(),  # noqa
-            # fmt: off
-            **{metric_name: metric.empty() for metric_name, metric in inspect.get_annotations(cls, eval_str=True).items()} # noqa
-            # fmt: on
-        )
-
-    @classmethod
-    def _from_model_output(cls, **kwargs) -> AnnotationsCompatibleCollection:
-        """Creates a `Collection` from model outputs."""
-        return cls(
-            _reduction_counter=clu.metrics._ReductionCounter.empty(),  # noqa
-            # fmt: off
-            **{metric_name: metric.from_model_output(**kwargs) for metric_name, metric in inspect.get_annotations(cls, eval_str=True).items()} # noqa
-            # fmt: on
-        )
-    
-    def as_dict(self, prefix: str | None = None) -> Dict[str, float]:
-        metrics = self.compute()
-        return {k: float(v) for k, v in metrics.items()}
-        
+class InvalidEpochsNumberError(RuntimeError):
+    def __init__(self, value: int):
+        super().__init__(f"Epochs must be greater than 0, but found {value}")
 
 
 M = TypeVar("M", bound=AnnotationsCompatibleCollection)
 ValidationStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
 TrainingStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
-MetricsAndParams = Tuple[
-    Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict
-]
-
-
-class OnStepBegin(Protocol[TS, M]):
-    def __call__(self, step: int) -> None:
-        ...
+MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
+StepType = Literal["training", "validation"]
 
 
 class OnStepEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> None:
-        ...
-
-
-class OnEpochBegin(Protocol[TS, M]):
-    def __call__(self, step: int) -> None:
+    def __call__(self, step: int, *, training_metrics: M, training_state: TS):
         ...
 
 
 class OnEpochEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, validation_metrics: M, training_state: TS) -> None:
+    def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS):
         ...
-
-
-class OnTrainingBegin(Protocol[TS, M]):
-    def __call__(
-        self,
-        step: int,
-        *,
-        training_state: TS,
-    ) -> TS | None:
-        ...
-
-
-class OnTrainingEnd(Protocol[TS, M]):
-    def __call__(
-        self,
-        step: int,
-        *,
-        training_metrics: M,
-        validation_metrics: M,
-        training_state: TS,
-    ) -> None:
-        ...
-
-
-StepType = Literal["training", "validation"]
-OnError = Callable[[TS, PyTree, PyTree, StepType, Exception], None]
 
 
 @jaxtyped
 @dataclass
 class TrainingHooks:
-    on_epoch_begin: List[OnEpochBegin] = dataclasses.field(default_factory=list)
-    on_epoch_end: List[OnEpochEnd] = dataclasses.field(default_factory=list)
-    on_step_begin: List[OnStepBegin] = dataclasses.field(default_factory=list)
-    on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
-    on_training_begin: List[OnTrainingBegin] = dataclasses.field(default_factory=list)
-    on_training_end: List[OnTrainingEnd] = dataclasses.field(default_factory=list)
-    on_error: List[OnError] = dataclasses.field(default_factory=list)
+    """
+    Attributes
+    ----------
 
-    def wrap_hooks(self, decorator: Callable[[Callable[P, T]], Callable[P, T]]):
-        return TrainingHooks(
-            on_training_begin=[decorator(i) for i in self.on_training_begin],
-            on_training_end=[decorator(i) for i in self.on_training_end],
-            on_epoch_begin=[decorator(i) for i in self.on_epoch_begin],
-            on_epoch_end=[decorator(i) for i in self.on_epoch_end],
-            on_step_begin=[decorator(i) for i in self.on_step_begin],
-            on_step_end=[decorator(i) for i in self.on_step_end],
-        )
+    on_epoch_begin:
+    on_epoch_end:
+        Typically, should be used to write validation metrics.
+    on_step_begin:
+    on_step_end:
+        Typically, should be used to write training metrics.
+    on_training_begin:
+        Can be used to reload training state from orbax checkpoint. For multi-device environments must return NOT replicated state.
+    on_training_end:
+        Can be used to save models weights, or to notify about training run completion.
+    on_error:
+        Can be used to process specific error types.
+
+
+    """
+
+    on_epoch_begin: List[Callable[[int], None]] = dataclasses.field(default_factory=list)
+    on_epoch_end: List[OnEpochEnd] = dataclasses.field(default_factory=list)
+    on_step_begin: List[Callable[[int], None]] = dataclasses.field(default_factory=list)
+    on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
+    on_training_begin: List[Callable[[TS], Optional[TS]]] = dataclasses.field(default_factory=list)
+    on_training_end: List[Callable[[TS], None]] = dataclasses.field(default_factory=list)
+    on_error: List[Callable[[TS, PyTree, PyTree, StepType, Exception], None]] = dataclasses.field(default_factory=list)
+
+    def call_on_epoch_begin(self, epoch: int):
+        for hook in self.on_epoch_begin:
+            hook(epoch)
+
+    def call_on_epoch_end(self, epoch: int, *, validation_metrics: M, training_state: TS):
+        for hook in self.on_epoch_end:
+            hook(epoch, validation_metrics=validation_metrics, training_state=training_state)
+
+    def call_on_step_begin(self, step: int):
+        for hook in self.on_step_begin:
+            hook(step)
+
+    def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS) -> bool:
+        should_stop = None
+        for hook in self.on_step_end:
+            hook(step, training_metrics=training_metrics, training_state=training_state)
+            if isinstance(hook, EarlyStopping):
+                if should_stop is not None:
+                    raise RuntimeError("Only one EarlyStopping is allowed")
+                should_stop = hook.should_stop
+
+        return should_stop
+
+    def call_on_training_begin(self, training_state: TS) -> TS | None:
+        reloaded_state = None
+        for hook in self.on_training_begin:
+            retval = hook(training_state)
+            if isinstance(retval, train_state.TrainState):
+                if reloaded_state is not None:
+                    raise RuntimeError("Only one reloaded state is allowed.")
+                reloaded_state = reloaded_state
+
+        return reloaded_state
+
+    def call_on_training_end(self, training_state: TS):
+        for hook in self.on_training_end:
+            hook(training_state)
 
     @jaxtyped
     @contextmanager
@@ -271,45 +155,8 @@ class TrainingHooks:
                 hook(state, x_batch, y_batch, step_type, exception)
 
 
-class UncheckedReportProgress(clu.periodic_actions.ReportProgress):
-    def __call__(self, step: int, **kwargs) -> bool:
-        return super().__call__(int(step))
-
-    @no_type_check
-    def _init_and_check(self, step: int, t: float):
-        """Initializes and checks it was called at every step."""
-        if self._previous_step is None:
-            self._previous_step = step
-            self._previous_time = t
-            self._last_step = step
-        else:
-            self._last_step = step
-
-
-class UncheckedPeriodicCallback(clu.periodic_actions.PeriodicCallback):
-    def __call__(self, step: int, *args, **kwargs) -> bool:
-        return super().__call__(int(step), *args, **kwargs)
-
-    @no_type_check
-    def _init_and_check(self, step: int, t: float):
-        """Initializes and checks it was called at every step."""
-        if self._previous_step is None:
-            self._previous_step = step
-            self._previous_time = t
-            self._last_step = step
-        else:
-            self._last_step = step
-
-
-class InvalidEpochsNumberError(RuntimeError):
-    def __init__(self, value: int):
-        super().__init__(f"Epochs must be greater than 0, but found {value}")
-
-
 @log_exception(ignore_argnames="params")
-def save_as_msgpack(
-    params: frozen_dict.FrozenDict, save_path: str = "model.msgpack"
-) -> None:
+def save_as_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.msgpack") -> None:
     """
     Parameters
     ----------
@@ -331,9 +178,7 @@ def save_as_msgpack(
 
 
 @log_exception(ignore_argnames="params")
-def load_from_msgpack(
-    params: frozen_dict.FrozenDict, save_path: str = "model.msgpack"
-) -> frozen_dict.FrozenDict:
+def load_from_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.msgpack") -> frozen_dict.FrozenDict:
     """
     Load model parameters from a msgpack file.
 
@@ -415,30 +260,25 @@ def fit_single_device(
     if hooks is None:
         hooks = TrainingHooks()
 
-    hooks = hooks.wrap_hooks(log_exception)
-
     current_step = None
-    for hook in hooks.on_training_begin:
-        loaded_state = hook(int(state.step), training_state=state)
-        if isinstance(loaded_state, train_state.TrainState):
-            logging.info("Loaded saved training state.")
-            state = loaded_state
-            current_step = 0
+    loaded_state = hooks.call_on_training_begin(state)
+    if isinstance(loaded_state, train_state.TrainState):
+        logging.info("Loaded saved training state.")
+        state = loaded_state
+        current_step = 0
 
     should_stop = False
-    for epoch in range(epochs):
-        if should_stop:
-            break
 
-        for hook in hooks.on_epoch_begin:
-            hook(int(state.step))
+    training_metrics = metrics_container_type.empty()
+    validation_metrics = metrics_container_type.empty()
+
+    for epoch in range(epochs):
+        hooks.call_on_epoch_begin(epoch)
 
         training_dataset = training_dataset_factory()
 
         if prefetch_buffer_size != 0:
-            training_dataset = prefetch_to_device(
-                training_dataset, prefetch_buffer_size
-            )
+            training_dataset = prefetch_to_device(training_dataset, prefetch_buffer_size)
 
         if verbose:
             training_dataset = tqdm(
@@ -449,39 +289,36 @@ def fit_single_device(
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
-            if current_step is not None and current_step < int(current_step):
+            if current_step is not None and current_step < int(state.step):
                 # Fast-forward reloaded steps
                 current_step += 1
                 continue
 
-            for hook in hooks.on_step_begin:
-                hook(int(state.step))
+            hooks.call_on_step_begin(int(state.step))
 
             with hooks.catch_error(state, x_batch, y_batch, "training"):
                 state, training_metrics_i = training_step_func(state, x_batch, y_batch)
             training_metrics = training_metrics.merge(training_metrics_i)
 
-            for hook in hooks.on_step_end:
-                hook(
-                    int(state.step),
-                    training_metrics=training_metrics,
-                    training_state=state,
-                )
-                if isinstance(hook, EarlyStopping) and hook.should_stop:
-                    logging.info("Stopping early")
-                    should_stop = True
-                    break
-        if verbose:
-            logging.info(
-                {f"train_{k}": f"{float(v):.3f}"}
-                for k, v in training_metrics.compute().items()
+            should_stop = hooks.call_on_step_end(
+                int(state.step), training_metrics=training_metrics, training_state=state
             )
+            if should_stop:
+                logging.info("Stopping early")
+                break
+
+        if current_step is not None and current_step < int(state.step):
+            continue
+
+        if verbose:
+            logging.info({f"train_{k}": f"{float(v):.3f}"} for k, v in training_metrics.compute().items())
+
+        if should_stop:
+            break
 
         validation_dataset = validation_dataset_factory()
         if prefetch_buffer_size != 0:
-            validation_dataset = prefetch_to_device(
-                validation_dataset, prefetch_buffer_size
-            )
+            validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
@@ -490,25 +327,15 @@ def fit_single_device(
             validation_metrics = validation_metrics.merge(validation_metrics_i)
 
         if verbose:
-            logging.info(
-                {f"val_{k}": f"{float(v):.3f}"}
-                for k, v in validation_metrics.compute().items()
-            )
+            logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
 
-        for hook in hooks.on_epoch_end:
-            hook(
-                int(state.step),
-                training_state=state,
-                validation_metrics=validation_metrics,
-            )
-            if isinstance(hook, EarlyStopping) and hook.should_stop:
-                logging.info("Stopping early")
-                should_stop = True
-                break
+        hooks.call_on_epoch_end(int(state.step), training_state=state, validation_metrics=validation_metrics)
 
     params = state.params
-    training_metrics = training_metrics.compute()  # noqa
-    validation_metrics = validation_metrics.compute()  # noqa
+    training_metrics = training_metrics.compute()
+    validation_metrics = validation_metrics.compute()
+
+    hooks.call_on_training_end(state)
 
     return (training_metrics, validation_metrics), params
 
@@ -573,8 +400,6 @@ def fit_multi_device(
     if hooks is None:
         hooks = TrainingHooks()
 
-    hooks = hooks.wrap_hooks(log_exception)
-    
     state = replicate_state(state)
 
     def shard_x_y(ds: Iterable[Tuple]):
@@ -587,27 +412,22 @@ def fit_multi_device(
 
     # maybe restore training state
     current_step = None
-    for hook in hooks.on_training_begin:
-        loaded_state = hook(step_number(state), training_state=state)
-        if isinstance(loaded_state, train_state.TrainState):
-            logging.info("Loaded saved training state.")
-            state = replicate_state(loaded_state)
-            current_step = 0
-    
+    loaded_state = hooks.call_on_training_begin(state)
+    if isinstance(loaded_state, train_state.TrainState):
+        logging.info("Loaded saved training state.")
+        state = replicate_state(loaded_state)
+        current_step = 0
+
     should_stop = False
+    training_metrics = jax_utils.replicate(metrics_container_type.empty())
+    validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
     for epoch in range(epochs):
-        if should_stop:
-            break
-
-        for hook in hooks.on_epoch_begin:
-            hook(step_number(state))
+        hooks.call_on_epoch_begin(epoch)
 
         training_dataset = shard_x_y(training_dataset_factory())
         if prefetch_buffer_size != 0:
-            training_dataset = jax_utils.prefetch_to_device(
-                training_dataset, prefetch_buffer_size
-            )
+            training_dataset = jax_utils.prefetch_to_device(training_dataset, prefetch_buffer_size)
 
         if verbose:
             training_dataset = tqdm(
@@ -624,35 +444,35 @@ def fit_multi_device(
                 current_step += 1
                 continue
 
-            for hook in hooks.on_step_begin:
-                hook(step_number(state))
+            hooks.call_on_step_begin(step_number(state))
 
             with hooks.catch_error(state, x_batch, y_batch, "training"):
                 state, training_metrics_i = training_step_func(state, x_batch, y_batch)
 
             training_metrics = training_metrics.merge(training_metrics_i)
 
-            for hook in hooks.on_step_end:
-                hook(
-                    step_number(state),
-                    training_metrics=training_metrics.unreplicate(),
-                    training_state=jax_utils.unreplicate(state),
-                )
-                if isinstance(hook, EarlyStopping) and hook.should_stop:
-                    logging.info("Stopping early")
-                    should_stop = True
-                    break
-        if verbose:
-            logging.info(
-                {f"train_{k}": f"{float(v):.3f}"}
-                for k, v in training_metrics.unreplicate().compute().items()
+            should_stop = hooks.call_on_step_end(
+                step_number(state),
+                training_metrics=training_metrics.unreplicate(),
+                training_state=jax_utils.unreplicate(state),
             )
+            if should_stop:
+                logging.info("Stopping early")
+                break
+
+        if current_step is not None and current_step < int(current_step):
+            # Fast-forward reloaded steps
+            continue
+
+        if verbose:
+            logging.info({f"train_{k}": f"{float(v):.3f}"} for k, v in training_metrics.unreplicate().compute().items())
+
+        if should_stop:
+            break
 
         validation_dataset = shard_x_y(validation_dataset_factory())
         if prefetch_buffer_size != 0:
-            validation_dataset = jax_utils.prefetch_to_device(
-                validation_dataset, prefetch_buffer_size
-            )
+            validation_dataset = jax_utils.prefetch_to_device(validation_dataset, prefetch_buffer_size)
 
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
@@ -662,25 +482,16 @@ def fit_multi_device(
             validation_metrics = validation_metrics.merge(validation_metrics_i)
 
         if verbose:
-            logging.info(
-                {f"val_{k}": f"{float(v):.3f}"}
-                for k, v in validation_metrics.unreplicate().compute().items()
-            )
+            logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.unreplicate().compute().items())
 
-        for hook in hooks.on_epoch_end:
-            hook(
-                step_number(state),
-                training_state=jax_utils.unreplicate(state),
-                validation_metrics=validation_metrics.unreplicate(),
-            )
-            if isinstance(hook, EarlyStopping) and hook.should_stop:
-                logging.info("Stopping early")
-                should_stop = True
-                break
+        hooks.call_on_epoch_end(
+            epoch, training_state=jax_utils.unreplicate(state), validation_metrics=validation_metrics.unreplicate()
+        )
 
+    hooks.call_on_training_end(state)
     params = jax_utils.unreplicate(state).params
-    training_metrics = training_metrics.unreplicate().compute()  # noqa
-    validation_metrics = validation_metrics.unreplicate().compute()  # noqa
+    training_metrics = training_metrics.unreplicate().compute()
+    validation_metrics = validation_metrics.unreplicate().compute()
 
     return (training_metrics, validation_metrics), params
 
@@ -721,12 +532,8 @@ def make_training_hooks(
 
     hooks = TrainingHooks()
 
-    training_writer = clu.metric_writers.create_default_writer(
-        logdir=tensorboard_logdir, collection="training"
-    )
-    validation_writer = clu.metric_writers.create_default_writer(
-        logdir=tensorboard_logdir, collection="validation"
-    )
+    training_writer = clu.metric_writers.create_default_writer(logdir=tensorboard_logdir, collection="training")
+    validation_writer = clu.metric_writers.create_default_writer(logdir=tensorboard_logdir, collection="validation")
 
     def flush(*args, **kwargs):
         training_writer.flush()
@@ -747,14 +554,19 @@ def make_training_hooks(
 
         hooks.on_step_end.append(report_progress_func)
 
+    def write_training_metrics_fn(step: int, *args, training_metrics: M, **kwargs):
+        training_writer.write_scalars(step, training_metrics.compute())
+
+    def write_validation_metrics_fn(epoch: int, *, validation_metrics: M, **kwargs):
+        step_num = epoch * num_training_steps
+        validation_writer.write_scalars(step_num, validation_metrics.compute())
+
     if write_metrics_frequency is not None:
         hooks.on_step_end.append(
             clu.periodic_actions.PeriodicCallback(
                 on_steps=[1, num_training_steps * epochs],
                 every_steps=num_training_steps // write_metrics_frequency,
-                callback_fn=lambda step, *args, training_metrics, **kwargs: training_writer.write_scalars(
-                    step, training_metrics.compute()
-                ),
+                callback_fn=write_training_metrics_fn,
                 execute_async=True,
             ),
         )
@@ -762,9 +574,7 @@ def make_training_hooks(
             UncheckedPeriodicCallback(
                 on_steps=[num_training_steps * epochs],
                 every_steps=num_training_steps // write_metrics_frequency,
-                callback_fn=lambda step, *args, validation_metrics, **kwargs: validation_writer.write_scalars(
-                    step, validation_metrics.compute()
-                ),
+                callback_fn=write_validation_metrics_fn,
                 execute_async=True,
             ),
         )
@@ -779,21 +589,10 @@ def make_training_hooks(
     return hooks
 
 
-def nan_div(a: float, b: float) -> float:
-    if b == 0:
-        return 0
-    else:
-        return a / b
-
-
 def replicate_state(state: TS) -> TS:
     state = jax_utils.replicate(state)
     if hasattr(state, "dropout_key"):
-        state.replace(
-            dropout_key=common_utils.shard_prng_key(
-                jax_utils.unreplicate(state.dropout_key)
-            )
-        )
+        state.replace(dropout_key=common_utils.shard_prng_key(jax_utils.unreplicate(state.dropout_key)))
     return state
 
 

@@ -12,9 +12,7 @@ T = TypeVar("T")
 P = ParamSpec("P")
 
 
-def prefetch_to_device(
-    iterator: Iterable[T], size: int = 2
-) -> Generator[T, None, None]:
+def prefetch_to_device(iterator: Iterable[T], size: int = 2) -> Generator[T, None, None]:
     """
     Parameters
     ----------
@@ -51,9 +49,7 @@ def prefetch_to_device(
     def enqueue(n: int) -> None:
         """Enqueues *up to* `n` elements from the iterator."""
         for data in itertools.islice(iterator, n):
-            queue.append(
-                jax.tree_util.tree_map(lambda xs: jax.device_put(xs, devices[0]), data)
-            )
+            queue.append(jax.tree_util.tree_map(lambda xs: jax.device_put(xs, devices[0]), data))
 
     enqueue(size)  # Fill up the buffer.
     while queue:

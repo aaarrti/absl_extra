@@ -40,9 +40,7 @@ def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         if linux_only and platform.system().lower() != "linux":
-            logging.info(
-                "Not running on linux, and linux_only==True, ignoring GPU strategy check."
-            )
+            logging.info("Not running on linux, and linux_only==True, ignoring GPU strategy check.")
             return func(*args, **kwargs)
 
         gpus = tf.config.list_physical_devices("GPU")
@@ -68,9 +66,7 @@ class NoOpStrategy:
         yield
 
 
-def make_tpu_strategy(
-    tpu: str | None = None, experimental_spmd_xla_partitioning: bool = True
-) -> StrategyLike:
+def make_tpu_strategy(tpu: str | None = None, experimental_spmd_xla_partitioning: bool = True) -> StrategyLike:
     """
     Used for testing locally scripts, which them must run on Colab TPUs. Allows to keep the same scripts,
     without changing strategy assignment.
@@ -99,15 +95,11 @@ def make_tpu_strategy(
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu)
     tf.config.experimental_connect_to_cluster(tpu)
     tf.tpu.experimental.initialize_tpu_system(tpu)
-    strategy = tf.distribute.TPUStrategy(
-        tpu, experimental_spmd_xla_partitioning=experimental_spmd_xla_partitioning
-    )
+    strategy = tf.distribute.TPUStrategy(tpu, experimental_spmd_xla_partitioning=experimental_spmd_xla_partitioning)
     return strategy
 
 
-def make_gpu_strategy(
-    strategy_cls: Type[StrategyLike] | None = None, force: bool = False, **kwargs
-) -> StrategyLike:
+def make_gpu_strategy(strategy_cls: Type[StrategyLike] | None = None, force: bool = False, **kwargs) -> StrategyLike:
     """
     Useful for testing locally scripts, which must run on multiple GPUs, without changing scripts structure.
 

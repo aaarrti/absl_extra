@@ -52,12 +52,8 @@ def log_exception(
         except Exception as ex:
             func_name = format_callable_name(func)
             func_args = inspect.signature(func).bind(*args, **kwargs).arguments
-            func_args_str = format_callable_args(
-                func_args, ignore_argnums, ignore_argnames
-            )
-            logger(
-                f"{func_name} with args ( {func_args_str} ) raised {format_exception(ex)}"
-            )
+            func_args_str = format_callable_args(func_args, ignore_argnums, ignore_argnames)
+            logger(f"{func_name} with args ( {func_args_str} ) raised {format_exception(ex)}")
             raise ex
 
     return wrapper
@@ -137,9 +133,7 @@ def log_after(
         func_name = format_callable_name(func)
 
         if isinstance(retval, Tuple):
-            filtered_retval = (
-                val for i, val in enumerate(retval) if i not in ignore_nums
-            )
+            filtered_retval = (val for i, val in enumerate(retval) if i not in ignore_nums)
         else:
             filtered_retval = retval
 

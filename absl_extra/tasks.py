@@ -66,9 +66,7 @@ _TASK_STORE: Dict[str, Callable[[...], None]] = dict()  # type: ignore
 
 class NonExistentTaskError(RuntimeError):
     def __init__(self, task: str):
-        super().__init__(
-            f"Unknown task {task}, registered are {list(_TASK_STORE.keys())}"
-        )
+        super().__init__(f"Unknown task {task}, registered are {list(_TASK_STORE.keys())}")
 
 
 @toolz.curry
@@ -173,9 +171,7 @@ def register_task(
         if isinstance(mongo_config, Mapping):
             mongo_config = MongoConfig(**mongo_config)
         db_factory = lambda: (  # noqa
-            MongoClient(mongo_config.uri)
-            .get_database(mongo_config.db_name)
-            .get_collection(mongo_config.collection)
+            MongoClient(mongo_config.uri).get_database(mongo_config.db_name).get_collection(mongo_config.collection)
         )
         kwargs["db_factory"] = db_factory
 
