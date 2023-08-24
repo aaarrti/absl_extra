@@ -405,8 +405,6 @@ def fit_multi_device(
     if hooks is None:
         hooks = TrainingHooks()
 
-    
-
     def shard_x_y(ds: Iterable[Tuple]):
         if skip_shard:
             return ds
@@ -422,8 +420,7 @@ def fit_multi_device(
         logging.info("Loaded saved training state.")
         state = loaded_state
         current_step = 0
-    
-    
+
     state = replicate_state(state)
 
     should_stop = False
