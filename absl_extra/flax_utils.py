@@ -445,7 +445,7 @@ def fit_multi_device(
                 training_metrics=training_metrics.unreplicate(),
                 training_state=jax_utils.unreplicate(state),
             )
-            should_stop = should_stop_early(state)
+            should_stop = should_stop_early(jax_utils.unreplicate(state))
             if should_stop:
                 logging.info("Stopping early")
                 break

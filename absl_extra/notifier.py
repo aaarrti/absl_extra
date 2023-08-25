@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from importlib import util
-from traceback import format_exception
 
 from absl import logging
 
@@ -44,7 +43,7 @@ class LoggingNotifier(BaseNotifier):
     def notify_task_failed(self, name: str, exception: Exception):
         # TODO: walk the stacktrace and log arguments of failed call.
         logging.info("-" * 50)
-        logging.error(f"Task {name} failed with {format_exception(exception)}")
+        logging.error(f"Task {name} failed with {exception}")
 
 
 if util.find_spec("slack_sdk"):
@@ -89,7 +88,6 @@ if util.find_spec("slack_sdk"):
 
         def notify_task_failed(self, name: str, exception: Exception):
             slack_client = slack_sdk.WebClient(token=self.slack_token)
-            err_msg = format_exception(exception)
             slack_client.chat_postMessage(
                 channel=self.channel_id,
                 blocks=[
@@ -97,7 +95,7 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":x: Task {name} failed, reason:\n ```{err_msg}```",
+                            "text": f":x: Task {name} failed, reason:\n ```{repr(exception)}```",
                         },
                     }
                 ],
