@@ -25,10 +25,11 @@ import clu.periodic_actions
 import tensorflow as tf
 from absl import logging
 from flax import jax_utils
+from flax.training.early_stopping import EarlyStopping
 from flax.core import frozen_dict
 from flax.struct import dataclass
 from flax.training import common_utils, train_state
-from jaxtyping import Array, Int, jaxtyped, PyTree, PRNGKeyArray
+from jaxtyping import Array, Int, jaxtyped, PyTree
 from tqdm.auto import tqdm
 
 from absl_extra.clu_utils import AnnotationsCompatibleCollection, UncheckedPeriodicCallback
@@ -41,16 +42,6 @@ T = TypeVar("T")
 TS = TypeVar("TS", bound=train_state.TrainState)
 S = TypeVar("S", bound=Sequence)
 DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]
-
-
-@runtime_checkable
-class EarlyStopping(Protocol):
-    should_stop: bool
-
-
-@runtime_checkable
-class TrainingStateWithDropout(Protocol):
-    dropout_key: PRNGKeyArray
 
 
 class InvalidEpochsNumberError(RuntimeError):
@@ -118,13 +109,9 @@ class TrainingHooks:
         for hook in self.on_step_begin:
             hook(step)
 
-    def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS) -> bool:
-        should_stop = False
+    def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS):
         for hook in self.on_step_end:
             hook(step, training_metrics=training_metrics, training_state=training_state)
-            if isinstance(hook, EarlyStopping):
-                should_stop = should_stop or hook.should_stop
-        return should_stop
 
     def call_on_training_begin(self, training_state: TS) -> TS | None:
         reloaded_state = None
@@ -302,9 +289,10 @@ def fit_single_device(
                 state, training_metrics_i = training_step_func(state, x_batch, y_batch)
             training_metrics = training_metrics.merge(training_metrics_i)
 
-            should_stop = hooks.call_on_step_end(
+            hooks.call_on_step_end(
                 int(state.step), training_metrics=training_metrics, training_state=state
             )
+            should_stop = should_stop_early(state)
             if should_stop:
                 logging.info("Stopping early")
                 break
@@ -452,12 +440,12 @@ def fit_multi_device(
                 state, training_metrics_i = training_step_func(state, x_batch, y_batch)
 
             training_metrics = training_metrics.merge(training_metrics_i)
-
-            should_stop = hooks.call_on_step_end(
+            hooks.call_on_step_end(
                 step_number(state),
                 training_metrics=training_metrics.unreplicate(),
                 training_state=jax_utils.unreplicate(state),
             )
+            should_stop = should_stop_early(state)
             if should_stop:
                 logging.info("Stopping early")
                 break
@@ -600,3 +588,11 @@ def replicate_state(state: TS) -> TS:
 
 def step_number(state: TS):
     return int(jax_utils.unreplicate(state.step))
+
+
+def should_stop_early(state: TS) -> bool:
+    return (
+        hasattr(state, "early_stopping") and
+        isinstance(state.early_stopping, EarlyStopping) and
+        state.early_stopping.should_stop
+    )
