@@ -34,7 +34,6 @@ from flax.training.early_stopping import EarlyStopping
 from tqdm.auto import tqdm
 
 from absl_extra.clu_utils import UncheckedPeriodicCallback
-from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
