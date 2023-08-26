@@ -94,7 +94,7 @@ class TrainingHooks:
     on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
     on_training_begin: List[Callable[[TS], Optional[TS]]] = dataclasses.field(default_factory=list)
     on_training_end: List[Callable[[TS], None]] = dataclasses.field(default_factory=list)
-    on_error: List[Callable[[TS, T, jnp.ndarray, StepType, Exception], None]] = dataclasses.field(default_factory=list)
+    on_error: List[Callable[[TS, T, jnp.ndarray, StepType, Exception], bool | None]] = dataclasses.field(default_factory=list)
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -152,8 +152,13 @@ class TrainingHooks:
         try:
             yield
         except Exception as exception:
+            handled = False
             for hook in self.on_error:
-                hook(state, x_batch, y_batch, step_type, exception)
+                retval = hook(state, x_batch, y_batch, step_type, exception)
+                if isinstance(retval, bool) and retval:
+                    handled = handled or retval
+            if not handled:
+                raise
 
 
 @log_exception(ignore_argnames="params")
@@ -528,8 +533,16 @@ def make_training_hooks(
 
     hooks = TrainingHooks()
 
-    training_writer = clu.metric_writers.create_default_writer(logdir=tensorboard_logdir, collection="training")
-    validation_writer = clu.metric_writers.create_default_writer(logdir=tensorboard_logdir, collection="validation")
+    training_writer = clu.metric_writers.create_default_writer(
+        logdir=tensorboard_logdir,
+        collection="training",
+        just_logging=tensorboard_logdir is None
+    )
+    validation_writer = clu.metric_writers.create_default_writer(
+        logdir=tensorboard_logdir,
+        collection="validation",
+        just_logging=tensorboard_logdir is None
+    )
 
     def flush(*args, **kwargs):
         training_writer.flush()
