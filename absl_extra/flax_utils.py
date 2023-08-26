@@ -16,6 +16,8 @@ from typing import (
     ContextManager,
     Literal,
     Optional,
+    Union,
+    Mapping
 )
 
 import clu.metric_writers
@@ -38,10 +40,10 @@ from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
 P = ParamSpec("P")
-T = TypeVar("T")
+T = TypeVar("T", bound=Union[Array, PyTree])
 TS = TypeVar("TS", bound=train_state.TrainState)
 S = TypeVar("S", bound=Sequence)
-DatasetFactory = Callable[[], Iterable[Tuple[T, Int[Array, "batch classes"]]]]
+DatasetFactory = Callable[[], Iterable[Tuple[T, Array]]]
 
 
 class InvalidEpochsNumberError(RuntimeError):
@@ -50,19 +52,19 @@ class InvalidEpochsNumberError(RuntimeError):
 
 
 M = TypeVar("M", bound=Collection)
-ValidationStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
-TrainingStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
+ValidationStep = Callable[[TS, T, Array], Tuple[TS, M]]
+TrainingStep = Callable[[TS, T, Array], Tuple[TS, M]]
 MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
 StepType = Literal["training", "validation"]
 
 
 class OnStepEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Dict[str, M | TS] | None:
+    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
         ...
 
 
 class OnEpochEnd(Protocol[TS, M]):
-    def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Dict[str, M | TS] | None:
+    def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
         ...
 
 
@@ -95,7 +97,7 @@ class TrainingHooks:
     on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
     on_training_begin: List[Callable[[TS], Optional[TS]]] = dataclasses.field(default_factory=list)
     on_training_end: List[Callable[[TS], None]] = dataclasses.field(default_factory=list)
-    on_error: List[Callable[[TS, PyTree, PyTree, StepType, Exception], None]] = dataclasses.field(default_factory=list)
+    on_error: List[Callable[[TS, T, Int[Array, "batch classes"], StepType, Exception], None]] = dataclasses.field(default_factory=list)
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -104,7 +106,7 @@ class TrainingHooks:
     def call_on_epoch_end(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Tuple[M, TS]:
         for hook in self.on_epoch_end:
             logs = hook(epoch, validation_metrics=validation_metrics, training_state=training_state)
-            if logs is not None:
+            if isinstance(logs, Mapping):
                 if "training_state" in logs:
                     training_state = training_state
                 if "validation_metrics" in logs:
@@ -119,7 +121,7 @@ class TrainingHooks:
     def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS) -> Tuple[M, TS]:
         for hook in self.on_step_end:
             logs = hook(step, training_metrics=training_metrics, training_state=training_state)
-            if logs is not None:
+            if isinstance(hook, Mapping):
                 if "training_state" in logs:
                     training_state = training_state
                 if "training_metrics" in logs:
@@ -147,8 +149,8 @@ class TrainingHooks:
     def catch_error(
         self,
         state: TrainingHooks,
-        x_batch: PyTree,
-        y_batch: PyTree,
+        x_batch: T,
+        y_batch: Array,
         step_type: StepType,
     ) -> ContextManager:
         try:
