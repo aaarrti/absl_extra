@@ -133,39 +133,6 @@ class BinaryAccuracy(NanSafeAverage):
         return super().from_model_output(values=jnp.asarray(predicted == labels, predicted.dtype))
 
 
-@struct.dataclass
-class AnnotationsCompatibleCollection(clu.metrics.Collection):
-    """
-    clu.metrics.Collection which works with __future__.annotations enabled.
-    Based on https://github.com/google/CommonLoopUtils/pull/295/files
-    """
-
-    @classmethod
-    def empty(cls) -> AnnotationsCompatibleCollection:
-        return cls(
-            _reduction_counter=clu.metrics._ReductionCounter.empty(),  # noqa
-            **{  # noqa
-                metric_name: metric.empty()  # noqa
-                for metric_name, metric in inspect.get_annotations(cls, eval_str=True).items()  # noqa
-            },
-        )
-
-    @classmethod
-    def _from_model_output(cls, **kwargs) -> AnnotationsCompatibleCollection:
-        """Creates a `Collection` from model outputs."""
-        return cls(
-            _reduction_counter=clu.metrics._ReductionCounter.empty(),  # noqa
-            **{  # noqa
-                metric_name: metric.from_model_output(**kwargs)  # noqa
-                for metric_name, metric in inspect.get_annotations(cls, eval_str=True).items()  # noqa
-            },
-        )
-
-    def as_dict(self, prefix: str | None = None) -> Dict[str, float]:
-        metrics = self.compute()
-        return {k: float(v) for k, v in metrics.items()}
-
-
 def nan_div(a: float, b: float) -> float:
     if b == 0:
         return 0

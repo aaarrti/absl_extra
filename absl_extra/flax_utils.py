@@ -13,7 +13,6 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    runtime_checkable,
     ContextManager,
     Literal,
     Optional,
@@ -24,15 +23,16 @@ import clu.metrics
 import clu.periodic_actions
 import tensorflow as tf
 from absl import logging
+from clu.metrics import Collection
 from flax import jax_utils
-from flax.training.early_stopping import EarlyStopping
 from flax.core import frozen_dict
 from flax.struct import dataclass
 from flax.training import common_utils, train_state
+from flax.training.early_stopping import EarlyStopping
 from jaxtyping import Array, Int, jaxtyped, PyTree
 from tqdm.auto import tqdm
 
-from absl_extra.clu_utils import AnnotationsCompatibleCollection, UncheckedPeriodicCallback
+from absl_extra.clu_utils import UncheckedPeriodicCallback
 from absl_extra.jax_utils import prefetch_to_device
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
@@ -49,7 +49,7 @@ class InvalidEpochsNumberError(RuntimeError):
         super().__init__(f"Epochs must be greater than 0, but found {value}")
 
 
-M = TypeVar("M", bound=AnnotationsCompatibleCollection)
+M = TypeVar("M", bound=Collection)
 ValidationStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
 TrainingStep = Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
 MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
@@ -57,12 +57,12 @@ StepType = Literal["training", "validation"]
 
 
 class OnStepEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, training_metrics: M, training_state: TS):
+    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Dict[str, M | TS] | None:
         ...
 
 
 class OnEpochEnd(Protocol[TS, M]):
-    def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS):
+    def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Dict[str, M | TS] | None:
         ...
 
 
@@ -80,7 +80,7 @@ class TrainingHooks:
     on_step_end:
         Typically, should be used to write training metrics.
     on_training_begin:
-        Can be used to reload training state from orbax checkpoint. For multi-device environments must return NOT replicated state.
+        Can be used to reload training training_state from orbax checkpoint. For multi-device environments must return NOT replicated training_state.
     on_training_end:
         Can be used to save models weights, or to notify about training run completion.
     on_error:
@@ -101,26 +101,40 @@ class TrainingHooks:
         for hook in self.on_epoch_begin:
             hook(epoch)
 
-    def call_on_epoch_end(self, epoch: int, *, validation_metrics: M, training_state: TS):
+    def call_on_epoch_end(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Tuple[M, TS]:
         for hook in self.on_epoch_end:
-            hook(epoch, validation_metrics=validation_metrics, training_state=training_state)
+            logs = hook(epoch, validation_metrics=validation_metrics, training_state=training_state)
+            if logs is not None:
+                if "training_state" in logs:
+                    training_state = training_state
+                if "validation_metrics" in logs:
+                    validation_metrics = validation_metrics
+
+        return validation_metrics, training_state
 
     def call_on_step_begin(self, step: int):
         for hook in self.on_step_begin:
             hook(step)
 
-    def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS):
+    def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS) -> Tuple[M, TS]:
         for hook in self.on_step_end:
-            hook(step, training_metrics=training_metrics, training_state=training_state)
+            logs = hook(step, training_metrics=training_metrics, training_state=training_state)
+            if logs is not None:
+                if "training_state" in logs:
+                    training_state = training_state
+                if "training_metrics" in logs:
+                    training_metrics = training_metrics
+
+        return training_metrics, training_state
 
     def call_on_training_begin(self, training_state: TS) -> TS | None:
         reloaded_state = None
         for hook in self.on_training_begin:
-            retval = hook(training_state)
-            if isinstance(retval, train_state.TrainState):
+            logs = hook(training_state)
+            if isinstance(logs, train_state.TrainState):
                 if reloaded_state is not None:
-                    raise RuntimeError("Only one reloaded state is allowed.")
-                reloaded_state = retval
+                    raise RuntimeError("Only one reloaded training_state is allowed.")
+                reloaded_state = logs
 
         return reloaded_state
 
@@ -198,7 +212,7 @@ def load_from_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.ms
 @jaxtyped
 def fit_single_device(
     *,
-    state: TS,
+    training_state: TS,
     metrics_container_type: Type[M],
     training_step_func: TrainingStep,
     training_dataset_factory: DatasetFactory,
@@ -213,8 +227,8 @@ def fit_single_device(
     """
     Parameters
     ----------
-    state : TS
-        The initial state of the training process.
+    training_state : TS
+        The initial training_state of the training process.
     training_dataset_factory : DatasetFactory
         A factory function that returns the training dataset.
     validation_dataset_factory : DatasetFactory
@@ -222,10 +236,10 @@ def fit_single_device(
     metrics_container_type : Type[M]
         The type of container to store the metrics.
     training_step_func : Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
-        A function that performs a single training step. It takes the training state, input data, and target data as inputs,
-        and returns the updated training state and metrics.
+        A function that performs a single training step. It takes the training training_state, input data, and target data as inputs,
+        and returns the updated training training_state and metrics.
     validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
-        A function that performs a single validation step. It takes the training state, input data, and target data as inputs,
+        A function that performs a single validation step. It takes the training training_state, input data, and target data as inputs,
         and returns the metrics.
     hooks : List[TrainingHook[TS, M]] | None, optional
         A list of training hooks to be executed before and after each training step. Defaults to None.
@@ -240,7 +254,7 @@ def fit_single_device(
     Returns
     -------
     Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
-        A tuple containing the training and validation metrics, and the final training state parameters.
+        A tuple containing the training and validation metrics, and the final training training_state parameters.
     """
 
     if epochs <= 0:
@@ -250,10 +264,10 @@ def fit_single_device(
         hooks = TrainingHooks()
 
     current_step = None
-    loaded_state = hooks.call_on_training_begin(state)
+    loaded_state = hooks.call_on_training_begin(training_state)
     if isinstance(loaded_state, train_state.TrainState):
-        logging.info("Loaded saved training state.")
-        state = loaded_state
+        logging.info("Loaded saved training training_state.")
+        training_state = loaded_state
         current_step = 0
 
     should_stop = False
@@ -278,26 +292,26 @@ def fit_single_device(
         training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
-            if current_step is not None and current_step < int(state.step):
+            if current_step is not None and current_step < int(training_state.step):
                 # Fast-forward reloaded steps
                 current_step += 1
                 continue
 
-            hooks.call_on_step_begin(int(state.step))
+            hooks.call_on_step_begin(int(training_state.step))
 
-            with hooks.catch_error(state, x_batch, y_batch, "training"):
-                state, training_metrics_i = training_step_func(state, x_batch, y_batch)
-            training_metrics = training_metrics.merge(training_metrics_i)
+            with hooks.catch_error(training_state, x_batch, y_batch, "training"):
+                training_state, training_step_metrics_i = training_step_func(training_state, x_batch, y_batch)
+            training_metrics = training_metrics.merge(training_step_metrics_i)
 
-            hooks.call_on_step_end(
-                int(state.step), training_metrics=training_metrics, training_state=state
+            training_metrics, training_state = hooks.call_on_step_end(
+                int(training_state.step), training_metrics=training_metrics, training_state=training_state
             )
-            should_stop = should_stop_early(state)
+            should_stop = should_stop_early(training_state)
             if should_stop:
                 logging.info("Stopping early")
                 break
 
-        if current_step is not None and current_step < int(state.step):
+        if current_step is not None and current_step < int(training_state.step):
             continue
 
         if verbose:
@@ -312,20 +326,22 @@ def fit_single_device(
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
-            with hooks.catch_error(state, x_batch, y_batch, "validation"):
-                validation_metrics_i = validation_step_func(state, x_batch, y_batch)
-            validation_metrics = validation_metrics.merge(validation_metrics_i)
+            with hooks.catch_error(training_state, x_batch, y_batch, "validation"):
+                validation_step_metrics_i = validation_step_func(training_state, x_batch, y_batch)
+            validation_metrics = validation_metrics.merge(validation_step_metrics_i)
 
         if verbose:
             logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
 
-        hooks.call_on_epoch_end(int(state.step), training_state=state, validation_metrics=validation_metrics)
+        validation_metrics, training_state = hooks.call_on_epoch_end(
+            int(training_state.step), training_state=training_state, validation_metrics=validation_metrics
+        )
 
-    params = state.params
+    params = training_state.params
     training_metrics = training_metrics.compute()
     validation_metrics = validation_metrics.compute()
 
-    hooks.call_on_training_end(state)
+    hooks.call_on_training_end(training_state)
 
     return (training_metrics, validation_metrics), params
 
@@ -333,7 +349,7 @@ def fit_single_device(
 @jaxtyped
 def fit_multi_device(
     *,
-    state: TS,
+    training_state: TS,
     metrics_container_type: Type[M],
     training_step_func: TrainingStep,
     training_dataset_factory: DatasetFactory,
@@ -349,8 +365,8 @@ def fit_multi_device(
     """
     Parameters
     ----------
-    state : TS
-        The initial state of the training process.
+    training_state : TS
+        The initial training_state of the training process.
     training_dataset_factory : DatasetFactory
         A factory function that returns the training dataset.
     validation_dataset_factory : DatasetFactory
@@ -358,10 +374,10 @@ def fit_multi_device(
     metrics_container_type : Type[M]
         The type of container to store the metrics.
     training_step_func : Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
-        A function that performs a single training step. It takes the training state, input data, and target data as inputs,
-        and returns the updated training state and metrics.
+        A function that performs a single training step. It takes the training training_state, input data, and target data as inputs,
+        and returns the updated training training_state and metrics.
     validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
-        A function that performs a single validation step. It takes the training state, input data, and target data as inputs,
+        A function that performs a single validation step. It takes the training training_state, input data, and target data as inputs,
         and returns the metrics.
     hooks : List[TrainingHook[TS, M]] | None, optional
         A list of training hooks to be executed before and after each training step. Defaults to None.
@@ -381,7 +397,7 @@ def fit_multi_device(
     Returns
     -------
     Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
-        A tuple containing the training and validation metrics, and the final training state parameters.
+        A tuple containing the training and validation metrics, and the final training training_state parameters.
     """
 
     if epochs <= 0:
@@ -398,15 +414,15 @@ def fit_multi_device(
             y = common_utils.shard(y)
             yield x, y
 
-    # maybe restore training state
+    # maybe restore training training_state
     current_step = None
-    loaded_state = hooks.call_on_training_begin(state)
+    loaded_state = hooks.call_on_training_begin(training_state)
     if isinstance(loaded_state, train_state.TrainState):
-        logging.info("Loaded saved training state.")
-        state = loaded_state
+        logging.info("Loaded saved training training_state.")
+        training_state = loaded_state
         current_step = 0
 
-    state = replicate_state(state)
+    training_state = replicate_state(training_state)
 
     should_stop = False
     training_metrics = jax_utils.replicate(metrics_container_type.empty())
@@ -434,18 +450,18 @@ def fit_multi_device(
                 current_step += 1
                 continue
 
-            hooks.call_on_step_begin(step_number(state))
+            hooks.call_on_step_begin(step_number(training_state))
 
-            with hooks.catch_error(jax_utils.unreplicate(state), x_batch, y_batch, "training"):
-                state, training_metrics_i = training_step_func(state, x_batch, y_batch)
+            with hooks.catch_error(jax_utils.unreplicate(training_state), x_batch, y_batch, "training"):
+                training_state, training_step_metrics = training_step_func(training_state, x_batch, y_batch)
 
-            training_metrics = training_metrics.merge(training_metrics_i)
-            hooks.call_on_step_end(
-                step_number(state),
+            training_metrics = training_metrics.merge(training_step_metrics)
+            training_metrics, training_state = hooks.call_on_step_end(
+                step_number(training_state),
                 training_metrics=training_metrics.unreplicate(),
-                training_state=jax_utils.unreplicate(state),
+                training_state=jax_utils.unreplicate(training_state),
             )
-            should_stop = should_stop_early(jax_utils.unreplicate(state))
+            should_stop = should_stop_early(jax_utils.unreplicate(training_state))
             if should_stop:
                 logging.info("Stopping early")
                 break
@@ -467,19 +483,21 @@ def fit_multi_device(
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            with hooks.catch_error(jax_utils.unreplicate(state), x_batch, y_batch, "validation"):
-                validation_metrics_i = validation_step_func(state, x_batch, y_batch)
-            validation_metrics = validation_metrics.merge(validation_metrics_i)
+            with hooks.catch_error(jax_utils.unreplicate(training_state), x_batch, y_batch, "validation"):
+                validation_step_metrics_i = validation_step_func(training_state, x_batch, y_batch)
+            validation_metrics = validation_metrics.merge(validation_step_metrics_i)
 
         if verbose:
             logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.unreplicate().compute().items())
 
-        hooks.call_on_epoch_end(
-            epoch, training_state=jax_utils.unreplicate(state), validation_metrics=validation_metrics.unreplicate()
+        validation_metrics, training_state = hooks.call_on_epoch_end(
+            epoch,
+            training_state=jax_utils.unreplicate(training_state),
+            validation_metrics=validation_metrics.unreplicate(),
         )
 
-    hooks.call_on_training_end(jax_utils.unreplicate(state))
-    params = jax_utils.unreplicate(state).params
+    hooks.call_on_training_end(jax_utils.unreplicate(training_state))
+    params = jax_utils.unreplicate(training_state).params
     training_metrics = training_metrics.unreplicate().compute()
     validation_metrics = validation_metrics.unreplicate().compute()
 
@@ -592,7 +610,7 @@ def step_number(state: TS):
 
 def should_stop_early(state: TS) -> bool:
     return (
-        hasattr(state, "early_stopping") and
-        isinstance(state.early_stopping, EarlyStopping) and
-        state.early_stopping.should_stop
+        hasattr(state, "early_stopping")
+        and isinstance(state.early_stopping, EarlyStopping)
+        and state.early_stopping.should_stop
     )
