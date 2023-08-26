@@ -217,7 +217,6 @@ def fit_single_device(
     validation_dataset_factory: DatasetFactory,
     validation_step_func: ValidationStep,
     epochs: int = 1,
-    prefetch_buffer_size: int = 2,
     verbose: bool = True,
     hooks: TrainingHooks | None = None,
     num_training_steps: int | None = None,
@@ -243,8 +242,6 @@ def fit_single_device(
         A list of training hooks to be executed before and after each training step. Defaults to None.
     epochs : int, optional
         The number of training epochs. Defaults to 1.
-    prefetch_buffer_size : int, optional
-        The size of the prefetch buffer for loading data. Defaults to 2. Set to 0 for TPU.
     verbose : bool, optional
         Whether to display verbose output during training. Defaults to False.
     num_training_steps:
@@ -277,9 +274,6 @@ def fit_single_device(
         hooks.call_on_epoch_begin(epoch)
 
         training_dataset = training_dataset_factory()
-
-        if prefetch_buffer_size != 0:
-            training_dataset = prefetch_to_device(training_dataset, prefetch_buffer_size)
 
         if verbose:
             training_dataset = tqdm(
@@ -319,8 +313,6 @@ def fit_single_device(
             break
 
         validation_dataset = validation_dataset_factory()
-        if prefetch_buffer_size != 0:
-            validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
         validation_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in validation_dataset:
@@ -332,7 +324,7 @@ def fit_single_device(
             logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
 
         validation_metrics, training_state = hooks.call_on_epoch_end(
-            int(training_state.step), training_state=training_state, validation_metrics=validation_metrics
+            epoch, training_state=training_state, validation_metrics=validation_metrics
         )
 
     params = training_state.params
