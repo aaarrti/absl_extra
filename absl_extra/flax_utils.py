@@ -5,24 +5,24 @@ from contextlib import contextmanager
 from typing import (
     Any,
     Callable,
+    ContextManager,
     Dict,
     Iterable,
     List,
+    Literal,
+    Mapping,
+    Optional,
     Protocol,
     Sequence,
     Tuple,
     Type,
     TypeVar,
-    ContextManager,
-    Literal,
-    Optional,
-    Union,
-    Mapping
 )
 
 import clu.metric_writers
 import clu.metrics
 import clu.periodic_actions
+import jax.numpy as jnp
 import tensorflow as tf
 from absl import logging
 from clu.metrics import Collection
@@ -31,7 +31,6 @@ from flax.core import frozen_dict
 from flax.struct import dataclass
 from flax.training import common_utils, train_state
 from flax.training.early_stopping import EarlyStopping
-from jaxtyping import Array, Int, jaxtyped, PyTree
 from tqdm.auto import tqdm
 
 from absl_extra.clu_utils import UncheckedPeriodicCallback
@@ -40,10 +39,10 @@ from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
 P = ParamSpec("P")
-T = TypeVar("T", bound=Union[Array, PyTree])
+T = TypeVar("T")
 TS = TypeVar("TS", bound=train_state.TrainState)
 S = TypeVar("S", bound=Sequence)
-DatasetFactory = Callable[[], Iterable[Tuple[T, Array]]]
+DatasetFactory = Callable[[], Iterable[Tuple[T, jnp.ndarray]]]
 
 
 class InvalidEpochsNumberError(RuntimeError):
@@ -52,8 +51,8 @@ class InvalidEpochsNumberError(RuntimeError):
 
 
 M = TypeVar("M", bound=Collection)
-ValidationStep = Callable[[TS, T, Array], Tuple[TS, M]]
-TrainingStep = Callable[[TS, T, Array], Tuple[TS, M]]
+ValidationStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
+TrainingStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
 MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
 StepType = Literal["training", "validation"]
 
@@ -68,7 +67,6 @@ class OnEpochEnd(Protocol[TS, M]):
         ...
 
 
-@jaxtyped
 @dataclass
 class TrainingHooks:
     """
@@ -97,7 +95,7 @@ class TrainingHooks:
     on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
     on_training_begin: List[Callable[[TS], Optional[TS]]] = dataclasses.field(default_factory=list)
     on_training_end: List[Callable[[TS], None]] = dataclasses.field(default_factory=list)
-    on_error: List[Callable[[TS, T, Int[Array, "batch classes"], StepType, Exception], None]] = dataclasses.field(default_factory=list)
+    on_error: List[Callable[[TS, T, jnp.ndarray, StepType, Exception], None]] = dataclasses.field(default_factory=list)
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -144,13 +142,12 @@ class TrainingHooks:
         for hook in self.on_training_end:
             hook(training_state)
 
-    @jaxtyped
     @contextmanager
     def catch_error(
         self,
         state: TrainingHooks,
         x_batch: T,
-        y_batch: Array,
+        y_batch: jnp.ndarray,
         step_type: StepType,
     ) -> ContextManager:
         try:
@@ -211,7 +208,6 @@ def load_from_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.ms
     return params
 
 
-@jaxtyped
 def fit_single_device(
     *,
     training_state: TS,
@@ -348,7 +344,6 @@ def fit_single_device(
     return (training_metrics, validation_metrics), params
 
 
-@jaxtyped
 def fit_multi_device(
     *,
     training_state: TS,

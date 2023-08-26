@@ -4,8 +4,8 @@ import functools
 import inspect
 from importlib import util
 from traceback import format_exception
-from types import MethodType, FunctionType
-from typing import Callable, Literal, TypeVar, Sequence, OrderedDict, Tuple
+from types import FunctionType, MethodType
+from typing import Callable, Literal, OrderedDict, Sequence, Tuple, TypeVar
 
 import toolz
 from absl import logging

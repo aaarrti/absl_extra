@@ -2,18 +2,7 @@ from __future__ import annotations
 
 import functools
 from importlib import util
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Mapping,
-    Protocol,
-    TypeVar,
-    NamedTuple,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Protocol, TypeVar, overload
 
 import toolz
 from absl import app, flags, logging
@@ -22,13 +11,6 @@ from absl_extra.notifier import BaseNotifier, LoggingNotifier
 
 T = TypeVar("T", bound=Callable)
 FLAGS = flags.FLAGS
-flags.DEFINE_string("task", default="main", help="Name of the function to execute.")
-flags.DEFINE_enum(
-    "log_level",
-    enum_values=["INFO", "DEBUG", "ERROR", "WARNING"],
-    default="INFO",
-    help="Logging level to use. If None, no auto-setup will be executed.",
-)
 
 if util.find_spec("pymongo"):
     from pymongo import MongoClient
@@ -65,8 +47,8 @@ _TASK_STORE: Dict[str, Callable[[...], None]] = dict()  # type: ignore
 
 
 class NonExistentTaskError(RuntimeError):
-    def __init__(self, task: str):
-        super().__init__(f"Unknown task {task}, registered are {list(_TASK_STORE.keys())}")
+    def __init__(self, task: str, task_flag: str):
+        super().__init__(f"Unknown {task_flag} {task}, registered are {list(_TASK_STORE.keys())}")
 
 
 @toolz.curry
@@ -192,12 +174,14 @@ def register_task(
     return _TASK_STORE[name]
 
 
-def run(argv: List[str] | None = None, **kwargs):
+def run(argv: List[str] | None = None, task_flag: str = "task", **kwargs):
     """
     Parameters
     ----------
     argv:
         CLI args passed to absl.app.run
+    task_flag:
+        Name of the CLI flag used to identify which task to run.
     kwargs:
         Kwargs passed to entrypoint function.
 
@@ -205,11 +189,12 @@ def run(argv: List[str] | None = None, **kwargs):
     -------
 
     """
+    flags.DEFINE_string(task_flag, default="main", help="Name of the function to execute.")
 
     def select_main(_):
-        task_name = FLAGS.task
+        task_name = getattr(FLAGS, task_flag)
         if task_name not in _TASK_STORE:
-            raise NonExistentTaskError(task_name)
+            raise NonExistentTaskError(task_name, task_flag)
         func = _TASK_STORE[task_name]
         func(**kwargs)
 

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import inspect
-from typing import Dict, no_type_check
-import jax
-import jax.numpy as jnp
+from typing import no_type_check
+
 import clu.metrics
 import clu.periodic_actions
-from jaxtyping import jaxtyped, Array, Float
+import jax
+import jax.numpy as jnp
 from flax import struct
+from jaxtyping import Array, Float, Int, jaxtyped
 
 
 class UncheckedReportProgress(clu.periodic_actions.ReportProgress):
@@ -124,8 +124,8 @@ class BinaryAccuracy(NanSafeAverage):
     def from_model_output(  # noqa
         cls,
         *,
-        logits: Float[Array, "batch classes"],  # noqa
-        labels: Int32[Array, "batch classes"],  # noqa
+        logits: Float[Array, "batch classes"],
+        labels: Int[Array, "batch classes"],
         threshold: float = 0.5,
         **kwargs,
     ) -> BinaryAccuracy:
