@@ -34,9 +34,11 @@ class CallbackFn(Protocol):
 def log_absl_flags_callback(*args, **kwargs):
     logging.info("-" * 50)
     flags_dict = flags.FLAGS.flag_values_dict()
-    if "config" in flags_dict:
-        flags_dict["config"] = flags_dict["config"].to_dict()
-    logging.info(f"ABSL flags: {json.dumps(flags_dict, sort_keys=True, indent=4)}")
+    flags_dict_copy = flags.FLAGS.flag_values_dict().copy()
+    for k, v in flags_dict.items():
+        if "config" in k:
+            del flags_dict_copy[k]
+    logging.info(f"ABSL flags: {json.dumps(flags_dict_copy, sort_keys=True, indent=4)}")
 
 
 def log_tensorflow_devices(*args, **kwargs):
