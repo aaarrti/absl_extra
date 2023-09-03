@@ -1,52 +1,9 @@
-from __future__ import annotations
-
-from typing import no_type_check
-
 import clu.metrics
 import clu.periodic_actions
 import jax
 import jax.numpy as jnp
 from flax import struct
 from jaxtyping import Array, Float, Int, jaxtyped
-
-
-class UncheckedReportProgress(clu.periodic_actions.ReportProgress):
-    def __call__(self, step: int, **kwargs) -> bool:
-        return super().__call__(int(step))
-
-    @no_type_check
-    def _init_and_check(self, step: int, t: float):
-        """Initializes and checks it was called at every step."""
-        if self._previous_step is None:
-            self._previous_step = step
-            self._previous_time = t
-            self._last_step = step
-        else:
-            self._last_step = step
-
-
-class UncheckedPeriodicCallback(clu.periodic_actions.PeriodicCallback):
-    def __call__(self, step: int, *args, **kwargs) -> bool:
-        return super().__call__(int(step), *args, **kwargs)
-
-    @no_type_check
-    def _init_and_check(self, step: int, t: float):
-        """Initializes and checks it was called at every step."""
-        if self._previous_step is None:
-            self._previous_step = step
-            self._previous_time = t
-            self._last_step = step
-        else:
-            self._last_step = step
-
-
-@struct.dataclass
-class NanSafeAverage(clu.metrics.Average):
-    def compute(self) -> float:
-        if self.count != 0:
-            return super().compute()
-        else:
-            return 0
 
 
 @jaxtyped
@@ -77,7 +34,7 @@ class F1Score(clu.metrics.Metric):
         labels: Int32[Array, "batch classes"],  # noqa
         threshold: float = 0.5,
         **kwargs,
-    ) -> F1Score:
+    ) -> "F1Score":
         probs = jax.nn.sigmoid(logits)
         predicted = jnp.asarray(probs >= threshold, labels.dtype)
         true_positive = jnp.sum((predicted == 1) & (labels == 1))
@@ -106,8 +63,8 @@ class F1Score(clu.metrics.Metric):
         )
 
     def compute(self) -> float:
-        precision = nan_div(self.true_positive, self.true_positive + self.false_positive)
-        recall = nan_div(self.true_positive, self.true_positive + self.false_negative)
+        precision = self.true_positive / (self.true_positive + self.false_positive)
+        recall = self.true_positive / (self.true_positive + self.false_negative)
 
         # Ensure we don't divide by zero if both precision and recall are zero
         if precision + recall == 0:
@@ -119,7 +76,7 @@ class F1Score(clu.metrics.Metric):
 
 @jaxtyped
 @struct.dataclass
-class BinaryAccuracy(NanSafeAverage):
+class BinaryAccuracy(clu.metrics.Average):
     @classmethod
     def from_model_output(  # noqa
         cls,
@@ -128,13 +85,6 @@ class BinaryAccuracy(NanSafeAverage):
         labels: Int[Array, "batch classes"],
         threshold: float = 0.5,
         **kwargs,
-    ) -> BinaryAccuracy:
+    ) -> "BinaryAccuracy":
         predicted = jnp.asarray(logits >= threshold, logits.dtype)
         return super().from_model_output(values=jnp.asarray(predicted == labels, predicted.dtype))
-
-
-def nan_div(a: float, b: float) -> float:
-    if b == 0:
-        return 0
-    else:
-        return a / b

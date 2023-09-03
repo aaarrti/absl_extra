@@ -17,23 +17,21 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    overload,
 )
 
-import clu.metric_writers
-import clu.metrics
 import clu.periodic_actions
 import jax.numpy as jnp
-import tensorflow as tf
 from absl import logging
 from clu.metrics import Collection
 from flax import jax_utils
-from flax.core import frozen_dict
+from flax.core.frozen_dict import FrozenDict
+from flax.serialization import from_bytes, msgpack_restore, to_bytes
 from flax.struct import dataclass
 from flax.training import common_utils, train_state
 from flax.training.early_stopping import EarlyStopping
 from tqdm.auto import tqdm
 
-from absl_extra.clu_utils import UncheckedPeriodicCallback
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
@@ -52,7 +50,7 @@ class InvalidEpochsNumberError(RuntimeError):
 M = TypeVar("M", bound=Collection)
 ValidationStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
 TrainingStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
-MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
+MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], FrozenDict]
 StepType = Literal["training", "validation"]
 
 
@@ -63,6 +61,19 @@ class OnStepEnd(Protocol[TS, M]):
 
 class OnEpochEnd(Protocol[TS, M]):
     def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
+        ...
+
+
+class OnError(Protocol[TS, T]):
+    def __call__(
+        self,
+        *,
+        training_state: TS,
+        x_batch: jnp.ndarray,
+        y_batch: jnp.ndarray,
+        step_type: StepType,
+        exception: Exception,
+    ) -> bool | None:
         ...
 
 
@@ -86,6 +97,41 @@ class TrainingHooks:
         Can be used to process specific error types.
 
 
+
+    Examples
+    --------
+    >>> import clu.metric_writers
+    >>> num_train_steps=1000
+    >>> epochs = 5
+    >>> hooks = TrainingHooks()
+    >>> training_writer = clu.metric_writers.create_default_writer(logdir="tensorboard", collection="training")
+    >>> validation_writer = clu.metric_writers.create_default_writer(logdir="tensorboard", collection="validation")
+    >>> def flush(*args, **kwargs):
+    ...     training_writer.flush()
+    ...     validation_writer.flush()
+    >>> hooks.on_training_end.append(flush)
+    >>> report_progress = clu.periodic_actions.ReportProgress(every_steps=100, num_train_steps=num_train_steps * epochs, writer=training_writer, every_secs=None)
+    >>>  def report_progress_func(step: int, *args, **kwargs):
+    ...      report_progress(step)
+    >>> hooks.on_step_end.append(report_progress_func)
+    >>> def write_training_metrics_fn(step: int, *args, training_metrics, **kwargs):
+    ...     training_writer.write_scalars(step, training_metrics.compute())
+    >>> def write_validation_metrics_fn(epoch: int, *, validation_metrics, **kwargs):
+    ...     step_num = epoch * num_train_steps
+    ...     validation_writer.write_scalars(step_num, validation_metrics.compute())
+    >>> hooks.on_step_end.append(
+    ...     clu.periodic_actions.PeriodicCallback(
+    ...         on_steps=[1, num_train_steps * epochs],
+    ...         every_steps=100,
+    ...         callback_fn=write_training_metrics_fn,
+    ...         execute_async=True,
+    ...     ),
+    ... )
+    >>> hooks.on_epoch_end.append(write_validation_metrics_fn)
+    >>> def write_hparams(*args, **kwargs):
+    ...     training_writer.write_hparams({"learning_rate": 1e-3, "ema": 0.99})
+    >>> hooks.on_training_begin.append(write_hparams)
+    >>> fit_single_device(hooks=hooks, ...)
     """
 
     on_epoch_begin: List[Callable[[int], None]] = dataclasses.field(default_factory=list)
@@ -94,7 +140,7 @@ class TrainingHooks:
     on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
     on_training_begin: List[Callable[[TS], Optional[TS]]] = dataclasses.field(default_factory=list)
     on_training_end: List[Callable[[TS], None]] = dataclasses.field(default_factory=list)
-    on_error: List[Callable[[TS, T, jnp.ndarray, StepType, Exception], bool | None]] = dataclasses.field(default_factory=list)
+    on_error: List[OnError] = dataclasses.field(default_factory=list)
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -144,7 +190,7 @@ class TrainingHooks:
     @contextmanager
     def catch_error(
         self,
-        state: TrainingHooks,
+        training_state: TS,
         x_batch: T,
         y_batch: jnp.ndarray,
         step_type: StepType,
@@ -154,7 +200,13 @@ class TrainingHooks:
         except Exception as exception:
             handled = False
             for hook in self.on_error:
-                retval = hook(state, x_batch, y_batch, step_type, exception)
+                retval = hook(
+                    training_state=training_state,
+                    x_batch=x_batch,
+                    y_batch=y_batch,
+                    step_type=step_type,
+                    exception=exception,
+                )
                 if isinstance(retval, bool) and retval:
                     handled = handled or retval
             if not handled:
@@ -162,7 +214,7 @@ class TrainingHooks:
 
 
 @log_exception(ignore_argnames="params")
-def save_as_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.msgpack") -> None:
+def save_as_msgpack(params: FrozenDict, save_path: str = "model.msgpack") -> None:
     """
     Parameters
     ----------
@@ -176,15 +228,32 @@ def save_as_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.msgp
     None
         This method does not return any value.
     """
-    logging.debug(f"Saving model to {save_path}")
-    msgpack_bytes: bytes = frozen_dict.serialization.to_bytes(params)
+    logging.debug(f"Saving to {save_path}")
+    msgpack_bytes: bytes = to_bytes(params)
 
-    with tf.io.gfile.GFile(save_path, "wb+") as file:
-        file.write(msgpack_bytes)
+    try:
+        import tensorflow as tf
+
+        with tf.io.gfile.GFile(save_path, "wb+") as file:
+            file.write(msgpack_bytes)
+    except (ModuleNotFoundError, ImportError):
+        logging.error("Failed to import tensorflow.io, falling back to local file-system")
+        with open(save_path, "wb+") as file:
+            file.write(msgpack_bytes)
+
+
+@overload
+def load_from_msgpack(params: None, save_path: str) -> Dict[str, Any]:
+    ...
+
+
+@overload
+def load_from_msgpack(params: FrozenDict, save_path: str) -> FrozenDict:
+    ...
 
 
 @log_exception(ignore_argnames="params")
-def load_from_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.msgpack") -> frozen_dict.FrozenDict:
+def load_from_msgpack(params: FrozenDict | None, save_path: str = "model.msgpack") -> FrozenDict | Dict[str, Any]:
     """
     Load model parameters from a msgpack file.
 
@@ -204,10 +273,21 @@ def load_from_msgpack(params: frozen_dict.FrozenDict, save_path: str = "model.ms
     """
     logging.debug(f"Loading model from {save_path}")
 
-    with tf.io.gfile.GFile(save_path, "rb") as file:
-        bytes_data = file.read()
+    try:
+        import tensorflow as tf
 
-    params = frozen_dict.serialization.from_bytes(params, bytes_data)
+        with tf.io.gfile.GFile(save_path, "rb") as file:
+            bytes_data = file.read()
+
+    except (ModuleNotFoundError, ImportError):
+        logging.error("Failed to import tensorflow.io, falling back to local file-system")
+        with open(save_path, "rb") as file:
+            bytes_data = file.read()
+
+    if params is not None:
+        params = from_bytes(params, bytes_data)
+    else:
+        params = msgpack_restore(bytes_data)
 
     return params
 
@@ -271,8 +351,8 @@ def fit_single_device(
 
     should_stop = False
 
-    training_metrics = metrics_container_type.empty()
-    validation_metrics = metrics_container_type.empty()
+    training_metrics: M = metrics_container_type.empty()
+    validation_metrics: M = metrics_container_type.empty()
 
     for epoch in range(epochs):
         hooks.call_on_epoch_begin(epoch)
@@ -418,8 +498,8 @@ def fit_multi_device(
     training_state = replicate_state(training_state)
 
     should_stop = False
-    training_metrics = jax_utils.replicate(metrics_container_type.empty())
-    validation_metrics = jax_utils.replicate(metrics_container_type.empty())
+    training_metrics: M = jax_utils.replicate(metrics_container_type.empty())
+    validation_metrics: M = jax_utils.replicate(metrics_container_type.empty())
 
     for epoch in range(epochs):
         hooks.call_on_epoch_begin(epoch)
@@ -495,107 +575,6 @@ def fit_multi_device(
     validation_metrics = validation_metrics.unreplicate().compute()
 
     return (training_metrics, validation_metrics), params
-
-
-def make_training_hooks(
-    num_training_steps: int,
-    epochs: int,
-    write_metrics_frequency: int | None = None,
-    tensorboard_logdir: str | None = "tensorboard",
-    hyperparams_factory: Callable[[], Dict[str, Any]] | None = None,
-    report_progress_frequency: int | None = None,
-) -> TrainingHooks:
-    """
-    Create typical training hooks
-
-    - training metrics writer
-    - validation metrics writer
-    - report progress
-
-    Parameters
-    ----------
-    num_training_steps
-    epochs
-    write_metrics_frequency:
-        Number of times per epoch to write metrics/report progress.
-    hyperparams_factory:
-        If not None, will write return value as hyperparams at beginning of each epoch to
-        use with Tensorboard visualization.
-    tensorboard_logdir:
-        Directory where to write metrics into. If set to None, will not write any tensorboard logs.
-    report_progress_frequency:
-        Number of times per epoc to report progress to stdout, if set to None no progress report will be generated.
-
-    Returns
-    -------
-
-    """
-
-    hooks = TrainingHooks()
-
-    training_writer = clu.metric_writers.create_default_writer(
-        logdir=tensorboard_logdir,
-        collection="training",
-        just_logging=tensorboard_logdir is None
-    )
-    validation_writer = clu.metric_writers.create_default_writer(
-        logdir=tensorboard_logdir,
-        collection="validation",
-        just_logging=tensorboard_logdir is None
-    )
-
-    def flush(*args, **kwargs):
-        training_writer.flush()
-        validation_writer.flush()
-
-    hooks.on_training_end.append(flush)
-
-    if report_progress_frequency is not None:
-        report_progress = clu.periodic_actions.ReportProgress(
-            every_steps=num_training_steps // report_progress_frequency,
-            num_train_steps=num_training_steps * epochs,
-            writer=training_writer,
-            every_secs=None,
-        )
-
-        def report_progress_func(step: int, *args, **kwargs):
-            report_progress(step)
-
-        hooks.on_step_end.append(report_progress_func)
-
-    def write_training_metrics_fn(step: int, *args, training_metrics: M, **kwargs):
-        training_writer.write_scalars(step, training_metrics.compute())
-
-    def write_validation_metrics_fn(epoch: int, *, validation_metrics: M, **kwargs):
-        step_num = epoch * num_training_steps
-        validation_writer.write_scalars(step_num, validation_metrics.compute())
-
-    if write_metrics_frequency is not None:
-        hooks.on_step_end.append(
-            clu.periodic_actions.PeriodicCallback(
-                on_steps=[1, num_training_steps * epochs],
-                every_steps=num_training_steps // write_metrics_frequency,
-                callback_fn=write_training_metrics_fn,
-                execute_async=True,
-            ),
-        )
-        hooks.on_epoch_end.append(
-            UncheckedPeriodicCallback(
-                on_steps=[num_training_steps * epochs],
-                every_steps=num_training_steps // write_metrics_frequency,
-                callback_fn=write_validation_metrics_fn,
-                execute_async=True,
-            ),
-        )
-
-    if hyperparams_factory is not None:
-
-        def write_hparams(*args, **kwargs):
-            training_writer.write_hparams(hyperparams_factory())
-
-        hooks.on_training_begin.append(write_hparams)
-
-    return hooks
 
 
 def replicate_state(state: TS) -> TS:

@@ -2,7 +2,18 @@ from __future__ import annotations
 
 import functools
 from importlib import util
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Protocol, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    NamedTuple,
+    Protocol,
+    TypeVar,
+    overload,
+)
 
 import toolz
 from absl import app, flags, logging
@@ -13,8 +24,8 @@ T = TypeVar("T", bound=Callable)
 FLAGS = flags.FLAGS
 
 if util.find_spec("pymongo"):
-    from pymongo import MongoClient
-    from pymongo.collection import Collection
+    from pymongo import MongoClient  # noqa
+    from pymongo.collection import Collection  # noqa
 else:
     Collection = type(None)
     logging.warning("pymongo not installed.")
