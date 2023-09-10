@@ -3,7 +3,7 @@ import clu.periodic_actions
 import jax
 import jax.numpy as jnp
 from flax import struct
-from jaxtyping import Array, Float, Int, jaxtyped
+from jaxtyping import Array, Float, Int32, jaxtyped
 
 
 @jaxtyped
@@ -82,7 +82,7 @@ class BinaryAccuracy(clu.metrics.Average):
         cls,
         *,
         logits: Float[Array, "batch classes"],
-        labels: Int[Array, "batch classes"],
+        labels: Int32[Array, "batch classes"],
         threshold: float = 0.5,
         **kwargs,
     ) -> "BinaryAccuracy":

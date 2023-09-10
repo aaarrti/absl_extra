@@ -81,7 +81,7 @@ if TYPE_CHECKING:
             ...
 
 
-class TrainingHooks:
+class TrainingHooks(NamedTuple):
     """
     Attributes
     ----------
