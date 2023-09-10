@@ -57,15 +57,7 @@ def log_shutdown_callback(name: str, *, notifier: BaseNotifier, **kwargs):
     notifier.notify_task_finished(name)
 
 
-def setup_logging(*args, **kwargs):
-    log_level = flags.FLAGS.log_level
-    from absl_extra.logging_utils import setup_logging
-
-    setup_logging(log_level=log_level)  # noqa
-
-
 DEFAULT_INIT_CALLBACKS = [
-    setup_logging,
     log_absl_flags_callback,
     log_startup_callback,
 ]
