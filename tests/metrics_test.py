@@ -3,7 +3,7 @@ import jax
 import chex
 import pytest
 
-from absl_extra.flax_utils import BinaryAccuracy
+from absl_extra.clu_utils import BinaryAccuracy
 
 
 PRNG_SEED = 69
