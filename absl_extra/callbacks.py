@@ -8,27 +8,19 @@ from absl import flags, logging
 
 if util.find_spec("ml_collections"):
     from ml_collections import ConfigDict
-else:
-    ConfigDict = None
-if util.find_spec("pymongo"):
-    from pymongo.collection import Collection
-else:
-    Collection = None
 
 if TYPE_CHECKING:
     from absl_extra.notifier import BaseNotifier
 
-
-class CallbackFn(Protocol):
-    def __call__(
-        self,
-        name: str,
-        *,
-        notifier: BaseNotifier,
-        config: ConfigDict = None,
-        db: Collection = None,
-    ) -> None:
-        ...
+    class CallbackFn(Protocol):
+        def __call__(
+            self,
+            name: str,
+            *,
+            notifier: BaseNotifier,
+            config: ConfigDict = None,
+        ) -> None:
+            ...
 
 
 def log_absl_flags_callback(*args, **kwargs):

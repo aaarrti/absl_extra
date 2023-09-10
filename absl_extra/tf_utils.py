@@ -3,8 +3,7 @@ from __future__ import annotations
 import functools
 import logging
 import platform
-from contextlib import contextmanager
-from typing import Callable, ContextManager, Protocol, Type, TypeVar
+from typing import Callable, Type, TypeVar
 
 import tensorflow as tf
 import toolz
@@ -52,21 +51,9 @@ def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, 
     return wrapper
 
 
-class StrategyLike(Protocol):
-    def scope(self) -> ContextManager:
-        ...
-
-
-class NoOpStrategy:
-    def __init__(self, **kwargs):
-        pass
-
-    @contextmanager
-    def scope(self):
-        yield
-
-
-def make_tpu_strategy(tpu: str | None = None, experimental_spmd_xla_partitioning: bool = True) -> StrategyLike:
+def make_tpu_strategy(
+    tpu: str | None = None, experimental_spmd_xla_partitioning: bool = True
+) -> tf.distribute.Strategy:
     """
     Used for testing locally scripts, which them must run on Colab TPUs. Allows to keep the same scripts,
     without changing strategy assignment.
@@ -90,7 +77,7 @@ def make_tpu_strategy(tpu: str | None = None, experimental_spmd_xla_partitioning
     """
     if platform.system().lower() != "linux":
         logging.warning("Not running on linux, falling back to NoOpStrategy.")
-        return NoOpStrategy()
+        return tf.distribute.get_strategy()
 
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu)
     tf.config.experimental_connect_to_cluster(tpu)
@@ -99,7 +86,9 @@ def make_tpu_strategy(tpu: str | None = None, experimental_spmd_xla_partitioning
     return strategy
 
 
-def make_gpu_strategy(strategy_cls: Type[StrategyLike] | None = None, force: bool = False, **kwargs) -> StrategyLike:
+def make_gpu_strategy(
+    strategy_cls: Type[tf.distribute.Strategy] | None = None, force: bool = False, **kwargs
+) -> tf.distribute.Strategy:
     """
     Useful for testing locally scripts, which must run on multiple GPUs, without changing scripts structure.
 
@@ -130,12 +119,12 @@ def make_gpu_strategy(strategy_cls: Type[StrategyLike] | None = None, force: boo
     n_gpus = len(gpus)
     if n_gpus == 0:
         logging.warning("No GPUs found, falling back to NoOpStrategy.")
-        return NoOpStrategy()
+        return tf.distribute.get_strategy()
     if n_gpus == 1:
         if force:
             return tf.distribute.OneDeviceStrategy(gpus[0])
         else:
-            return NoOpStrategy()
+            return tf.distribute.get_strategy()
 
     if strategy_cls is None:
         strategy_cls = tf.distribute.MirroredStrategy

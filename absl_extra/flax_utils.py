@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import dataclasses
 from contextlib import contextmanager
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     ContextManager,
@@ -11,6 +11,7 @@ from typing import (
     List,
     Literal,
     Mapping,
+    NamedTuple,
     Optional,
     Protocol,
     Sequence,
@@ -22,12 +23,12 @@ from typing import (
 
 import clu.periodic_actions
 import jax.numpy as jnp
+import jax.random
 from absl import logging
 from clu.metrics import Collection
-from flax import jax_utils
+from flax import jax_utils, struct
 from flax.core.frozen_dict import FrozenDict
 from flax.serialization import from_bytes, msgpack_restore, to_bytes
-from flax.struct import dataclass
 from flax.training import common_utils, train_state
 from flax.training.early_stopping import EarlyStopping
 from tqdm.auto import tqdm
@@ -37,47 +38,49 @@ from absl_extra.typing_utils import ParamSpec
 
 P = ParamSpec("P")
 T = TypeVar("T")
-TS = TypeVar("TS", bound=train_state.TrainState)
 S = TypeVar("S", bound=Sequence)
 DatasetFactory = Callable[[], Iterable[Tuple[T, jnp.ndarray]]]
 
 
-class InvalidEpochsNumberError(RuntimeError):
-    def __init__(self, value: int):
-        super().__init__(f"Epochs must be greater than 0, but found {value}")
+if TYPE_CHECKING:
+    # This one should not be directly subclassed
+    class TrainStateContainer(train_state.TrainState):
+        dropout_key: jax.random.KeyArray | None
+        early_stopping: EarlyStopping | None
+
+    TS = TypeVar("TS", bound=TrainStateContainer)
+
+    M = TypeVar("M", bound=Collection)
+    ValidationStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
+    TrainingStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
+    MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], FrozenDict]
+    StepType = Literal["training", "validation"]
+
+    class ParamSharding(NamedTuple):
+        replicate: Callable[[TS], TS]
+        un_replicate: Callable[[TS], TS]
+
+    class OnStepEnd(Protocol[TS, M]):
+        def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
+            ...
+
+    class OnEpochEnd(Protocol[TS, M]):
+        def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
+            ...
+
+    class OnError(Protocol[TS, T]):
+        def __call__(
+            self,
+            *,
+            training_state: TS,
+            x_batch: jnp.ndarray,
+            y_batch: jnp.ndarray,
+            step_type: StepType,
+            exception: Exception,
+        ) -> bool | None:
+            ...
 
 
-M = TypeVar("M", bound=Collection)
-ValidationStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
-TrainingStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
-MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], FrozenDict]
-StepType = Literal["training", "validation"]
-
-
-class OnStepEnd(Protocol[TS, M]):
-    def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
-        ...
-
-
-class OnEpochEnd(Protocol[TS, M]):
-    def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
-        ...
-
-
-class OnError(Protocol[TS, T]):
-    def __call__(
-        self,
-        *,
-        training_state: TS,
-        x_batch: jnp.ndarray,
-        y_batch: jnp.ndarray,
-        step_type: StepType,
-        exception: Exception,
-    ) -> bool | None:
-        ...
-
-
-@dataclass
 class TrainingHooks:
     """
     Attributes
@@ -134,13 +137,13 @@ class TrainingHooks:
     >>> fit_single_device(hooks=hooks, ...)
     """
 
-    on_epoch_begin: List[Callable[[int], None]] = dataclasses.field(default_factory=list)
-    on_epoch_end: List[OnEpochEnd] = dataclasses.field(default_factory=list)
-    on_step_begin: List[Callable[[int], None]] = dataclasses.field(default_factory=list)
-    on_step_end: List[OnStepEnd] = dataclasses.field(default_factory=list)
-    on_training_begin: List[Callable[[TS], Optional[TS]]] = dataclasses.field(default_factory=list)
-    on_training_end: List[Callable[[TS], None]] = dataclasses.field(default_factory=list)
-    on_error: List[OnError] = dataclasses.field(default_factory=list)
+    on_epoch_begin: List[Callable[[int], None]] = []
+    on_epoch_end: List[OnEpochEnd] = []
+    on_step_begin: List[Callable[[int], None]] = []
+    on_step_end: List[OnStepEnd] = []
+    on_training_begin: List[Callable[[TS], Optional[TS]]] = []
+    on_training_end: List[Callable[[TS], None]] = []
+    on_error: List[OnError] = []
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -213,16 +216,19 @@ class TrainingHooks:
                 raise
 
 
-def combine_hooks(h1: TrainingHooks, h2: TrainingHooks) -> TrainingHooks:
-    return TrainingHooks(
-        on_epoch_begin=[*h1.on_training_begin, *h2.on_step_begin],
-        on_epoch_end=[*h1.on_epoch_end, *h2.on_epoch_end],
-        on_step_begin=[*h1.on_step_begin, *h1.on_step_begin],
-        on_step_end=[*h1.on_step_end, *h2.on_step_end],
-        on_training_begin=[*h1.on_training_begin, *h2.on_training_begin],
-        on_training_end=[*h1.on_training_end, *h2.on_training_end],
-        on_error=[*h1.on_error, *h2.on_error],
-    )
+def combine_hooks(*hooks: TrainingHooks) -> TrainingHooks:
+    combined_hooks = TrainingHooks()
+
+    for h in hooks:
+        combined_hooks.on_training_begin.extend(h.on_training_begin)
+        combined_hooks.on_training_end.extend(h.on_training_end)
+        combined_hooks.on_step_begin.extend(h.on_step_begin)
+        combined_hooks.on_step_end.extend(h.on_step_end)
+        combined_hooks.on_epoch_begin.extend(h.on_epoch_begin)
+        combined_hooks.on_step_end.extend(h.on_epoch_end)
+        combined_hooks.on_error.extend(h.on_error)
+
+    return combined_hooks
 
 
 @log_exception(ignore_argnames="params")
@@ -349,7 +355,7 @@ def fit_single_device(
     """
 
     if epochs <= 0:
-        raise InvalidEpochsNumberError(epochs)
+        raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
 
     if hooks is None:
         hooks = TrainingHooks()
@@ -446,6 +452,7 @@ def fit_multi_device(
     verbose: bool = True,
     num_training_steps: int | None = None,
     skip_shard: bool = False,
+    params_sharding: ParamSharding | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -478,6 +485,7 @@ def fit_multi_device(
         If set to True, will skip sharding of data before passing it to training_step_func
         and validation_step_func. You might want it, in case your train step is decorated
         with @pad_shard_unpad. Applies only to distributed training.
+    params_sharding
 
     Returns
     -------
@@ -485,8 +493,14 @@ def fit_multi_device(
         A tuple containing the training and validation metrics, and the final training training_state parameters.
     """
 
+    if params_sharding is None:
+        params_sharding = ParamSharding(
+            replicate=replicate_state,
+            un_replicate=jax_utils.unreplicate,
+        )
+
     if epochs <= 0:
-        raise InvalidEpochsNumberError(epochs)
+        raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
 
     if hooks is None:
         hooks = TrainingHooks()
@@ -507,7 +521,7 @@ def fit_multi_device(
         training_state = loaded_state
         current_step = 0
 
-    training_state = replicate_state(training_state)
+    training_state = params_sharding.replicate(training_state)
 
     should_stop = False
     training_metrics: M = jax_utils.replicate(metrics_container_type.empty())
@@ -591,8 +605,8 @@ def fit_multi_device(
 
 def replicate_state(state: TS) -> TS:
     state = jax_utils.replicate(state)
-    if hasattr(state, "dropout_key"):
-        state.replace(dropout_key=common_utils.shard_prng_key(jax_utils.unreplicate(state.dropout_key)))
+    if state.dropout_key is not None:
+        state = state.replace(dropout_key=common_utils.shard_prng_key(jax_utils.unreplicate(state.dropout_key)))
     return state
 
 
@@ -601,8 +615,4 @@ def step_number(state: TS):
 
 
 def should_stop_early(state: TS) -> bool:
-    return (
-        hasattr(state, "early_stopping")
-        and isinstance(state.early_stopping, EarlyStopping)
-        and state.early_stopping.should_stop
-    )
+    return state.early_stopping is not None and state.early_stopping.should_stop
