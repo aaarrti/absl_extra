@@ -213,6 +213,18 @@ class TrainingHooks:
                 raise
 
 
+def combine_hooks(h1: TrainingHooks, h2: TrainingHooks) -> TrainingHooks:
+    return TrainingHooks(
+        on_epoch_begin=[*h1.on_training_begin, *h2.on_step_begin],
+        on_epoch_end=[*h1.on_epoch_end, *h2.on_epoch_end],
+        on_step_begin=[*h1.on_step_begin, *h1.on_step_begin],
+        on_step_end=[*h1.on_step_end, *h2.on_step_end],
+        on_training_begin=[*h1.on_training_begin, *h2.on_training_begin],
+        on_training_end=[*h1.on_training_end, *h2.on_training_end],
+        on_error=[*h1.on_error, *h2.on_error],
+    )
+
+
 @log_exception(ignore_argnames="params")
 def save_as_msgpack(params: FrozenDict, save_path: str = "model.msgpack") -> None:
     """
