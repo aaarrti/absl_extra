@@ -5,7 +5,7 @@ import inspect
 from importlib import util
 from traceback import format_exception
 from types import FunctionType, MethodType
-from typing import Callable, Literal, OrderedDict, Sequence, Tuple, TypeVar
+from typing import Callable, Literal, OrderedDict, Sequence, TypeVar
 
 import toolz
 from absl import logging
@@ -132,10 +132,10 @@ def log_after(
         retval = func(*args, **kwargs)
         func_name = format_callable_name(func)
 
-        if isinstance(retval, Tuple):
-            filtered_retval = (val for i, val in enumerate(retval) if i not in ignore_nums)
+        if isinstance(retval, tuple):
+            filtered_retval = tuple([val for i, val in enumerate(retval) if i not in ignore_nums])
         else:
-            filtered_retval = retval
+            filtered_retval = retval  # type: ignore
 
         logger(f"Exited {func_name}(...) with return value: {repr(filtered_retval)}")
         return retval

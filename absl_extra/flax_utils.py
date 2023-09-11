@@ -21,7 +21,6 @@ from typing import (
     overload,
 )
 
-import clu.periodic_actions
 import jax.numpy as jnp
 import jax.random
 from absl import logging
@@ -36,17 +35,18 @@ from tqdm.auto import tqdm
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
-P = ParamSpec("P")
-T = TypeVar("T")
-S = TypeVar("S", bound=Sequence)
-DatasetFactory = Callable[[], Iterable[Tuple[T, jnp.ndarray]]]
-
 
 if TYPE_CHECKING:
     # This one should not be directly subclassed
     class TrainStateContainer(train_state.TrainState):
         dropout_key: jax.random.KeyArray | None
         early_stopping: EarlyStopping | None
+
+    P = ParamSpec("P")
+    T = TypeVar("T")
+    S = TypeVar("S", bound=Sequence)
+    C = TypeVar("C", bound=Callable)
+    DatasetFactory = Callable[[], Iterable[Tuple[T, jnp.ndarray]]]
 
     TS = TypeVar("TS", bound=TrainStateContainer)
 
@@ -96,7 +96,8 @@ class TrainingHooks:
     on_step_end:
         Typically, should be used to write training metrics.
     on_training_begin:
-        Can be used to reload training training_state from orbax checkpoint. For multi-device environments must return NOT replicated training_state.
+        Can be used to reload training training_state from orbax checkpoint.
+        For multi-device environments must return NOT replicated training_state.
     on_training_end:
         Can be used to save models weights, or to notify about training run completion.
     on_error:
@@ -116,7 +117,8 @@ class TrainingHooks:
     ...     training_writer.flush()
     ...     validation_writer.flush()
     >>> hooks.on_training_end.append(flush)
-    >>> report_progress = clu.periodic_actions.ReportProgress(every_steps=100, num_train_steps=num_train_steps * epochs, writer=training_writer, every_secs=None)
+    >>> report_progress = clu.periodic_actions.ReportProgress(every_steps=100, num_train_steps=num_train_steps * epochs,
+     ... writer=training_writer, every_secs=None)
     >>>  def report_progress_func(step: int, *args, **kwargs):
     ...      report_progress(step)
     >>> hooks.on_step_end.append(report_progress_func)
@@ -218,7 +220,7 @@ class TrainingHooks:
             if not handled:
                 raise
 
-    def decorate_hooks(self, decorator: Callable[[Callable[P, T]], Callable[P, T]]) -> TrainingHooks:
+    def decorate_hooks(self, decorator: Callable[[C], C]) -> TrainingHooks:
         return TrainingHooks(
             on_training_begin=[decorator(i) for i in self.on_training_begin],
             on_training_end=[decorator(i) for i in self.on_training_end],
@@ -571,7 +573,7 @@ def fit_multi_device(
 
             un_replicated_state = un_replicate_state_fn(training_state)
             training_metrics, training_state = hooks.call_on_step_end(
-                int(training_state.step),
+                int(un_replicated_state),
                 training_metrics=training_metrics.unreplicate(),
                 training_state=un_replicated_state,
             )

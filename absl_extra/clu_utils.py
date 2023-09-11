@@ -30,8 +30,8 @@ class F1Score(clu.metrics.Metric):
     def from_model_output(
         cls,
         *,
-        logits: Float[Array, "batch classes"],  # noqa
-        labels: Int32[Array, "batch classes"],  # noqa
+        logits: Float[Array, "batch classes"],
+        labels: Int32[Array, "batch classes"],
         threshold: float = 0.5,
         **kwargs,
     ) -> "F1Score":
