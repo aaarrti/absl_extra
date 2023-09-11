@@ -144,13 +144,12 @@ def log_after(
 
 
 def format_callable_name(func: Callable[P, R]) -> str:
-    if inspect.isfunction(func):
-        _func: FunctionType = func
-        return f"{_func.__module__}.{_func.__qualname__}"
-
-    elif inspect.ismethod(func):
+    if inspect.ismethod(func):
         _method: MethodType = func
         return f"{_method.__module__}.{_method.__class__}.{_method.__qualname__}"
+    else:
+        _func: FunctionType = func
+        return f"{_func.__module__}.{_func.__qualname__}"
 
 
 def format_callable_args(

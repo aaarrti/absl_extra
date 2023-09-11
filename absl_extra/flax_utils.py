@@ -55,10 +55,7 @@ if TYPE_CHECKING:
     TrainingStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
     MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], FrozenDict]
     StepType = Literal["training", "validation"]
-
-    class ParamSharding(NamedTuple):
-        replicate: Callable[[TS], TS]
-        un_replicate: Callable[[TS], TS]
+    CustomReplication = Tuple[Callable[[TS], TS], Callable[[TS], TS]]
 
     class OnStepEnd(Protocol[TS, M]):
         def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
@@ -81,7 +78,13 @@ if TYPE_CHECKING:
             ...
 
 
-class TrainingHooks(NamedTuple):
+class ParamSharding(NamedTuple):
+    replicate: Callable[[TS], TS]
+    un_replicate: Callable[[TS], TS]
+
+
+@struct.dataclass
+class TrainingHooks:
     """
     Attributes
     ----------
@@ -137,13 +140,13 @@ class TrainingHooks(NamedTuple):
     >>> fit_single_device(hooks=hooks, ...)
     """
 
-    on_epoch_begin: List[Callable[[int], None]] = []
-    on_epoch_end: List[OnEpochEnd] = []
-    on_step_begin: List[Callable[[int], None]] = []
-    on_step_end: List[OnStepEnd] = []
-    on_training_begin: List[Callable[[TS], Optional[TS]]] = []
-    on_training_end: List[Callable[[TS], None]] = []
-    on_error: List[OnError] = []
+    on_epoch_begin: List[Callable[[int], None]] = struct.field(pytree_node=False, default_factory=list)
+    on_epoch_end: List[OnEpochEnd] = struct.field(pytree_node=False, default_factory=list)
+    on_step_begin: List[Callable[[int], None]] = struct.field(pytree_node=False, default_factory=list)
+    on_step_end: List[OnStepEnd] = struct.field(pytree_node=False, default_factory=list)
+    on_training_begin: List[Callable[[TS], Optional[TS]]] = struct.field(pytree_node=False, default_factory=list)
+    on_training_end: List[Callable[[TS], None]] = struct.field(pytree_node=False, default_factory=list)
+    on_error: List[OnError] = struct.field(pytree_node=False, default_factory=list)
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -215,6 +218,17 @@ class TrainingHooks(NamedTuple):
             if not handled:
                 raise
 
+    def decorate_hooks(self, decorator: Callable[[Callable[P, T]], Callable[P, T]]) -> TrainingHooks:
+        return TrainingHooks(
+            on_training_begin=[decorator(i) for i in self.on_training_begin],
+            on_training_end=[decorator(i) for i in self.on_training_end],
+            on_epoch_begin=[decorator(i) for i in self.on_epoch_begin],
+            on_epoch_end=[decorator(i) for i in self.on_epoch_end],
+            on_step_end=[decorator(i) for i in self.on_step_end],
+            on_step_begin=[decorator(i) for i in self.on_step_begin],
+            on_error=[decorator(i) for i in self.on_error],
+        )
+
 
 def combine_hooks(*hooks: TrainingHooks) -> TrainingHooks:
     combined_hooks = TrainingHooks()
@@ -222,10 +236,10 @@ def combine_hooks(*hooks: TrainingHooks) -> TrainingHooks:
     for h in hooks:
         combined_hooks.on_training_begin.extend(h.on_training_begin)
         combined_hooks.on_training_end.extend(h.on_training_end)
+        combined_hooks.on_epoch_begin.extend(h.on_epoch_begin)
+        combined_hooks.on_epoch_end.extend(h.on_epoch_end)
         combined_hooks.on_step_begin.extend(h.on_step_begin)
         combined_hooks.on_step_end.extend(h.on_step_end)
-        combined_hooks.on_epoch_begin.extend(h.on_epoch_begin)
-        combined_hooks.on_step_end.extend(h.on_epoch_end)
         combined_hooks.on_error.extend(h.on_error)
 
     return combined_hooks
@@ -452,7 +466,7 @@ def fit_multi_device(
     verbose: bool = True,
     num_training_steps: int | None = None,
     skip_shard: bool = False,
-    params_sharding: ParamSharding | None = None,
+    custom_replication: CustomReplication | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -485,7 +499,7 @@ def fit_multi_device(
         If set to True, will skip sharding of data before passing it to training_step_func
         and validation_step_func. You might want it, in case your train step is decorated
         with @pad_shard_unpad. Applies only to distributed training.
-    params_sharding
+    custom_replication
 
     Returns
     -------
@@ -493,11 +507,11 @@ def fit_multi_device(
         A tuple containing the training and validation metrics, and the final training training_state parameters.
     """
 
-    if params_sharding is None:
-        params_sharding = ParamSharding(
-            replicate=replicate_state,
-            un_replicate=jax_utils.unreplicate,
-        )
+    if custom_replication is None:
+        replicate_state_fn = default_replicate_state
+        un_replicate_state_fn = jax_utils.unreplicate
+    else:
+        replicate_state_fn, un_replicate_state_fn = custom_replication
 
     if epochs <= 0:
         raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
@@ -521,7 +535,7 @@ def fit_multi_device(
         training_state = loaded_state
         current_step = 0
 
-    training_state = params_sharding.replicate(training_state)
+    training_state = replicate_state_fn(training_state)
 
     should_stop = False
     training_metrics: M = jax_utils.replicate(metrics_container_type.empty())
@@ -549,18 +563,19 @@ def fit_multi_device(
                 current_step += 1
                 continue
 
-            hooks.call_on_step_begin(step_number(training_state))
+            hooks.call_on_step_begin(int(un_replicate_state_fn(training_state.step)))
 
-            with hooks.catch_error(jax_utils.unreplicate(training_state), x_batch, y_batch, "training"):
+            with hooks.catch_error(un_replicate_state_fn(training_state), x_batch, y_batch, "training"):
                 training_state, training_step_metrics = training_step_func(training_state, x_batch, y_batch)
-
             training_metrics = training_metrics.merge(training_step_metrics)
+
+            un_replicated_state = un_replicate_state_fn(training_state)
             training_metrics, training_state = hooks.call_on_step_end(
-                step_number(training_state),
+                int(training_state.step),
                 training_metrics=training_metrics.unreplicate(),
-                training_state=jax_utils.unreplicate(training_state),
+                training_state=un_replicated_state,
             )
-            should_stop = should_stop_early(jax_utils.unreplicate(training_state))
+            should_stop = should_stop_early(un_replicated_state)
             if should_stop:
                 logging.info("Stopping early")
                 break
@@ -582,7 +597,7 @@ def fit_multi_device(
         validation_metrics = jax_utils.replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            with hooks.catch_error(jax_utils.unreplicate(training_state), x_batch, y_batch, "validation"):
+            with hooks.catch_error(un_replicate_state_fn(training_state), x_batch, y_batch, "validation"):
                 validation_step_metrics_i = validation_step_func(training_state, x_batch, y_batch)
             validation_metrics = validation_metrics.merge(validation_step_metrics_i)
 
@@ -591,27 +606,23 @@ def fit_multi_device(
 
         validation_metrics, training_state = hooks.call_on_epoch_end(
             epoch,
-            training_state=jax_utils.unreplicate(training_state),
+            training_state=un_replicate_state_fn(training_state),
             validation_metrics=validation_metrics.unreplicate(),
         )
 
-    hooks.call_on_training_end(jax_utils.unreplicate(training_state))
-    params = jax_utils.unreplicate(training_state).params
+    training_state = un_replicate_state_fn(training_state)
+    hooks.call_on_training_end(training_state)
     training_metrics = training_metrics.unreplicate().compute()
     validation_metrics = validation_metrics.unreplicate().compute()
 
-    return (training_metrics, validation_metrics), params
+    return (training_metrics, validation_metrics), training_state.params
 
 
-def replicate_state(state: TS) -> TS:
+def default_replicate_state(state: TS) -> TS:
     state = jax_utils.replicate(state)
     if state.dropout_key is not None:
         state = state.replace(dropout_key=common_utils.shard_prng_key(jax_utils.unreplicate(state.dropout_key)))
     return state
-
-
-def step_number(state: TS):
-    return int(jax_utils.unreplicate(state.step))
 
 
 def should_stop_early(state: TS) -> bool:
