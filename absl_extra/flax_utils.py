@@ -5,7 +5,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ContextManager,
     Dict,
     Iterable,
     List,
@@ -43,29 +42,28 @@ if TYPE_CHECKING:
         early_stopping: EarlyStopping | None
 
     P = ParamSpec("P")
-    T = TypeVar("T")
     S = TypeVar("S", bound=Sequence)
     C = TypeVar("C", bound=Callable)
-    DatasetFactory = Callable[[], Iterable[Tuple[T, jnp.ndarray]]]
+    DatasetFactory = Callable[[], Iterable[Tuple[jnp.ndarray, jnp.ndarray]]]
 
     TS = TypeVar("TS", bound=TrainStateContainer)
 
-    M = TypeVar("M", bound=Collection)
-    ValidationStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
-    TrainingStep = Callable[[TS, T, jnp.ndarray], Tuple[TS, M]]
+    M = TypeVar("M", bound=Collection, contravariant=True)
+    ValidationStep = Callable[[TS, jnp.ndarray, jnp.ndarray], Tuple[TS, M]]
+    TrainingStep = Callable[[TS, jnp.ndarray, jnp.ndarray], Tuple[TS, M]]
     MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], FrozenDict]
     StepType = Literal["training", "validation"]
     CustomReplication = Tuple[Callable[[TS], TS], Callable[[TS], TS]]
 
-    class OnStepEnd(Protocol[TS, M]):
+    class OnStepEnd(Protocol):
         def __call__(self, step: int, *, training_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
             ...
 
-    class OnEpochEnd(Protocol[TS, M]):
+    class OnEpochEnd(Protocol):
         def __call__(self, epoch: int, *, validation_metrics: M, training_state: TS) -> Mapping[str, M | TS] | None:
             ...
 
-    class OnError(Protocol[TS, T]):
+    class OnError(Protocol):
         def __call__(
             self,
             *,
@@ -172,7 +170,7 @@ class TrainingHooks:
     def call_on_step_end(self, step: int, *, training_metrics: M, training_state: TS) -> Tuple[M, TS]:
         for hook in self.on_step_end:
             logs = hook(step, training_metrics=training_metrics, training_state=training_state)
-            if isinstance(hook, Mapping):
+            if logs is not None and isinstance(hook, Mapping):
                 if "training_state" in logs:
                     training_state = training_state
                 if "training_metrics" in logs:
@@ -180,7 +178,7 @@ class TrainingHooks:
 
         return training_metrics, training_state
 
-    def call_on_training_begin(self, training_state: TS) -> TS | None:
+    def call_on_training_begin(self, training_state: TS):
         reloaded_state = None
         for hook in self.on_training_begin:
             logs = hook(training_state)
@@ -199,10 +197,10 @@ class TrainingHooks:
     def catch_error(
         self,
         training_state: TS,
-        x_batch: T,
+        x_batch: jnp.ndarray,
         y_batch: jnp.ndarray,
         step_type: StepType,
-    ) -> ContextManager:
+    ):
         try:
             yield
         except Exception as exception:
@@ -312,7 +310,7 @@ def load_from_msgpack(params: FrozenDict | None, save_path: str = "model.msgpack
     else:
         params = msgpack_restore(bytes_data)
 
-    return params
+    return params  # type: ignore
 
 
 def fit(
@@ -408,13 +406,13 @@ def _fit_single_device(
     epochs: int,
     verbose: bool,
     hooks: TrainingHooks,
-    num_training_steps: int,
+    num_training_steps: int | None,
 ) -> MetricsAndParams:
     current_step = None
     loaded_state = hooks.call_on_training_begin(training_state)
     if isinstance(loaded_state, train_state.TrainState):
         logging.info("Loaded saved training training_state.")
-        training_state = loaded_state
+        training_state = loaded_state  # type: ignore
         current_step = 0
 
     should_stop = False
@@ -500,7 +498,7 @@ def _fit_multi_device(
     epochs,
     prefetch_buffer_size,
     verbose: bool = True,
-    num_training_steps: int,
+    num_training_steps: int | None,
 ) -> MetricsAndParams:
     if epochs <= 0:
         raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
@@ -513,7 +511,7 @@ def _fit_multi_device(
     loaded_state = hooks.call_on_training_begin(training_state)
     if isinstance(loaded_state, train_state.TrainState):
         logging.info("Loaded saved training training_state.")
-        training_state = loaded_state
+        training_state = loaded_state  # type: ignore
         current_step = 0
 
     training_state = replicate(training_state)

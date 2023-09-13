@@ -148,12 +148,12 @@ def format_callable_name(func: Callable[P, R]) -> str:
         _method: MethodType = func
         return f"{_method.__module__}.{_method.__class__}.{_method.__qualname__}"
     else:
-        _func: FunctionType = func
+        _func: FunctionType = func  # type: ignore
         return f"{_func.__module__}.{_func.__qualname__}"
 
 
 def format_callable_args(
-    arguments: OrderedDict[str, ...],
+    arguments: OrderedDict[str, ...],  # type: ignore
     ignore_argnums: Sequence[int] = (),
     ignore_argnames: Sequence[str] = (),
 ) -> str:

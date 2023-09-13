@@ -61,7 +61,7 @@ def register_task(
     notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
     init_callbacks: List[CallbackFn] | None = None,
     post_callbacks: List[CallbackFn] | None = None,
-) -> Callable[[Callable[P, None]], Callable[P, None]]:
+) -> Callable[P, None]:  # type: ignore
     """
     Parameters
     ----------
@@ -93,8 +93,6 @@ def register_task(
     if notifier is None:
         notifier = LoggingNotifier()
 
-    kwargs = {}
-
     if init_callbacks is None:
         init_callbacks = DEFAULT_INIT_CALLBACKS  # type: ignore
 
@@ -106,10 +104,9 @@ def register_task(
         notifier=notifier,
         init_callbacks=init_callbacks,
         post_callbacks=post_callbacks,
-        **kwargs,
     )(func)
 
-    return _TASK_STORE[name]
+    return _TASK_STORE[name]  # type: ignore
 
 
 def run(argv: List[str] | None = None, task_flag: str = "task", **kwargs):
