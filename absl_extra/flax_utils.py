@@ -25,16 +25,16 @@ import jax.numpy as jnp
 import jax.random
 from absl import logging
 from clu.metrics import Collection
-from flax import jax_utils, struct
 from flax.core.frozen_dict import FrozenDict
+from flax.jax_utils import prefetch_to_device, replicate, unreplicate
 from flax.serialization import from_bytes, msgpack_restore, to_bytes
+from flax.struct import dataclass, field
 from flax.training import common_utils, train_state
 from flax.training.early_stopping import EarlyStopping
 from tqdm.auto import tqdm
 
 from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
-
 
 if TYPE_CHECKING:
     # This one should not be directly subclassed
@@ -83,7 +83,7 @@ class ParamSharding(NamedTuple):
     un_replicate: Callable[[TS], TS]
 
 
-@struct.dataclass
+@dataclass
 class TrainingHooks:
     """
     Attributes
@@ -142,13 +142,13 @@ class TrainingHooks:
     >>> fit_single_device(hooks=hooks, ...)
     """
 
-    on_epoch_begin: List[Callable[[int], None]] = struct.field(pytree_node=False, default_factory=list)
-    on_epoch_end: List[OnEpochEnd] = struct.field(pytree_node=False, default_factory=list)
-    on_step_begin: List[Callable[[int], None]] = struct.field(pytree_node=False, default_factory=list)
-    on_step_end: List[OnStepEnd] = struct.field(pytree_node=False, default_factory=list)
-    on_training_begin: List[Callable[[TS], Optional[TS]]] = struct.field(pytree_node=False, default_factory=list)
-    on_training_end: List[Callable[[TS], None]] = struct.field(pytree_node=False, default_factory=list)
-    on_error: List[OnError] = struct.field(pytree_node=False, default_factory=list)
+    on_epoch_begin: List[Callable[[int], None]] = field(pytree_node=False, default_factory=list)
+    on_epoch_end: List[OnEpochEnd] = field(pytree_node=False, default_factory=list)
+    on_step_begin: List[Callable[[int], None]] = field(pytree_node=False, default_factory=list)
+    on_step_end: List[OnStepEnd] = field(pytree_node=False, default_factory=list)
+    on_training_begin: List[Callable[[TS], Optional[TS]]] = field(pytree_node=False, default_factory=list)
+    on_training_end: List[Callable[[TS], None]] = field(pytree_node=False, default_factory=list)
+    on_error: List[OnError] = field(pytree_node=False, default_factory=list)
 
     def call_on_epoch_begin(self, epoch: int):
         for hook in self.on_epoch_begin:
@@ -219,17 +219,6 @@ class TrainingHooks:
                     handled = handled or retval
             if not handled:
                 raise
-
-    def decorate_hooks(self, decorator: Callable[[C], C]) -> TrainingHooks:
-        return TrainingHooks(
-            on_training_begin=[decorator(i) for i in self.on_training_begin],
-            on_training_end=[decorator(i) for i in self.on_training_end],
-            on_epoch_begin=[decorator(i) for i in self.on_epoch_begin],
-            on_epoch_end=[decorator(i) for i in self.on_epoch_end],
-            on_step_end=[decorator(i) for i in self.on_step_end],
-            on_step_begin=[decorator(i) for i in self.on_step_begin],
-            on_error=[decorator(i) for i in self.on_error],
-        )
 
 
 def combine_hooks(*hooks: TrainingHooks) -> TrainingHooks:
@@ -326,7 +315,7 @@ def load_from_msgpack(params: FrozenDict | None, save_path: str = "model.msgpack
     return params
 
 
-def fit_single_device(
+def fit(
     *,
     training_state: TS,
     metrics_container_type: Type[M],
@@ -334,9 +323,10 @@ def fit_single_device(
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     validation_step_func: ValidationStep,
-    epochs: int = 1,
-    verbose: bool = True,
     hooks: TrainingHooks | None = None,
+    epochs: int = 1,
+    prefetch_buffer_size: int = 2,
+    verbose: bool = True,
     num_training_steps: int | None = None,
 ) -> MetricsAndParams:
     """
@@ -360,22 +350,66 @@ def fit_single_device(
         A list of training hooks to be executed before and after each training step. Defaults to None.
     epochs : int, optional
         The number of training epochs. Defaults to 1.
+    prefetch_buffer_size : int, optional
+        The size of the prefetch buffer for loading data. Defaults to 2. Set to 0 for TPU.
     verbose : bool, optional
         Whether to display verbose output during training. Defaults to False.
     num_training_steps:
         Must be provided in cases verbose=True, and dataset is not typing.Sized.
+
     Returns
     -------
     Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
         A tuple containing the training and validation metrics, and the final training training_state parameters.
     """
-
     if epochs <= 0:
         raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
 
     if hooks is None:
         hooks = TrainingHooks()
 
+    if jax.device_count() == 1:
+        return _fit_single_device(
+            training_state=training_state,
+            metrics_container_type=metrics_container_type,
+            training_step_func=training_step_func,
+            training_dataset_factory=training_dataset_factory,
+            validation_dataset_factory=validation_dataset_factory,
+            validation_step_func=validation_step_func,
+            epochs=epochs,
+            verbose=verbose,
+            hooks=hooks,
+            num_training_steps=num_training_steps,
+        )
+    else:
+        return _fit_multi_device(
+            training_state=training_state,
+            metrics_container_type=metrics_container_type,
+            training_step_func=training_step_func,
+            training_dataset_factory=training_dataset_factory,
+            validation_dataset_factory=validation_dataset_factory,
+            validation_step_func=validation_step_func,
+            hooks=hooks,
+            epochs=epochs,
+            prefetch_buffer_size=prefetch_buffer_size,
+            verbose=verbose,
+            num_training_steps=num_training_steps,
+        )
+
+
+def _fit_single_device(
+    *,
+    training_state: TS,
+    metrics_container_type: Type[M],
+    training_step_func: TrainingStep,
+    training_dataset_factory: DatasetFactory,
+    validation_dataset_factory: DatasetFactory,
+    validation_step_func: ValidationStep,
+    epochs: int,
+    verbose: bool,
+    hooks: TrainingHooks,
+    num_training_steps: int,
+) -> MetricsAndParams:
     current_step = None
     loaded_state = hooks.call_on_training_begin(training_state)
     if isinstance(loaded_state, train_state.TrainState):
@@ -454,7 +488,7 @@ def fit_single_device(
     return (training_metrics, validation_metrics), params
 
 
-def fit_multi_device(
+def _fit_multi_device(
     *,
     training_state: TS,
     metrics_container_type: Type[M],
@@ -462,72 +496,17 @@ def fit_multi_device(
     training_dataset_factory: DatasetFactory,
     validation_dataset_factory: DatasetFactory,
     validation_step_func: ValidationStep,
-    hooks: TrainingHooks | None = None,
-    epochs: int = 1,
-    prefetch_buffer_size: int = 2,
+    hooks: TrainingHooks,
+    epochs,
+    prefetch_buffer_size,
     verbose: bool = True,
-    num_training_steps: int | None = None,
-    skip_shard: bool = False,
-    custom_replication: CustomReplication | None = None,
+    num_training_steps: int,
 ) -> MetricsAndParams:
-    """
-    Parameters
-    ----------
-    training_state : TS
-        The initial training_state of the training process.
-    training_dataset_factory : DatasetFactory
-        A factory function that returns the training dataset.
-    validation_dataset_factory : DatasetFactory
-        A factory function that returns the validation dataset.
-    metrics_container_type : Type[M]
-        The type of container to store the metrics.
-    training_step_func : Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
-        A function that performs a single training step. It takes the training training_state, input data, and target data as inputs,
-        and returns the updated training training_state and metrics.
-    validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
-        A function that performs a single validation step. It takes the training training_state, input data, and target data as inputs,
-        and returns the metrics.
-    hooks : List[TrainingHook[TS, M]] | None, optional
-        A list of training hooks to be executed before and after each training step. Defaults to None.
-    epochs : int, optional
-        The number of training epochs. Defaults to 1.
-    prefetch_buffer_size : int, optional
-        The size of the prefetch buffer for loading data. Defaults to 2. Set to 0 for TPU.
-    verbose : bool, optional
-        Whether to display verbose output during training. Defaults to False.
-    num_training_steps:
-        Must be provided in cases verbose=True, and dataset is not typing.Sized.
-    skip_shard:
-        If set to True, will skip sharding of data before passing it to training_step_func
-        and validation_step_func. You might want it, in case your train step is decorated
-        with @pad_shard_unpad. Applies only to distributed training.
-    custom_replication
-
-    Returns
-    -------
-    Tuple[Tuple[Dict[str, float], Dict[str, float]], frozen_dict.FrozenDict]
-        A tuple containing the training and validation metrics, and the final training training_state parameters.
-    """
-
-    if custom_replication is None:
-        replicate_state_fn = default_replicate_state
-        un_replicate_state_fn = jax_utils.unreplicate
-    else:
-        replicate_state_fn, un_replicate_state_fn = custom_replication
-
     if epochs <= 0:
         raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
 
     if hooks is None:
         hooks = TrainingHooks()
-
-    def shard_x_y(ds: Iterable[Tuple]):
-        if skip_shard:
-            return ds
-        for x, y in ds:
-            x = common_utils.shard(x)
-            y = common_utils.shard(y)
-            yield x, y
 
     # maybe restore training training_state
     current_step = None
@@ -537,18 +516,18 @@ def fit_multi_device(
         training_state = loaded_state
         current_step = 0
 
-    training_state = replicate_state_fn(training_state)
+    training_state = replicate(training_state)
 
     should_stop = False
-    training_metrics: M = jax_utils.replicate(metrics_container_type.empty())
-    validation_metrics: M = jax_utils.replicate(metrics_container_type.empty())
+    training_metrics: M = replicate(metrics_container_type.empty())
+    validation_metrics: M = replicate(metrics_container_type.empty())
 
     for epoch in range(epochs):
         hooks.call_on_epoch_begin(epoch)
 
         training_dataset = shard_x_y(training_dataset_factory())
         if prefetch_buffer_size != 0:
-            training_dataset = jax_utils.prefetch_to_device(training_dataset, prefetch_buffer_size)
+            training_dataset = prefetch_to_device(training_dataset, prefetch_buffer_size)
 
         if verbose:
             training_dataset = tqdm(
@@ -557,7 +536,7 @@ def fit_multi_device(
                 desc=f"Epoch {epoch + 1}/{epochs}...",
             )
 
-        training_metrics = jax_utils.replicate(metrics_container_type.empty())
+        training_metrics = replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in training_dataset:
             if current_step is not None and current_step < int(current_step):
@@ -565,13 +544,13 @@ def fit_multi_device(
                 current_step += 1
                 continue
 
-            hooks.call_on_step_begin(int(un_replicate_state_fn(training_state.step)))
+            hooks.call_on_step_begin(int(unreplicate(training_state.step)))
 
-            with hooks.catch_error(un_replicate_state_fn(training_state), x_batch, y_batch, "training"):
+            with hooks.catch_error(unreplicate(training_state), x_batch, y_batch, "training"):
                 training_state, training_step_metrics = training_step_func(training_state, x_batch, y_batch)
             training_metrics = training_metrics.merge(training_step_metrics)
 
-            un_replicated_state = un_replicate_state_fn(training_state)
+            un_replicated_state = unreplicate(training_state)
             training_metrics, training_state = hooks.call_on_step_end(
                 int(un_replicated_state),
                 training_metrics=training_metrics.unreplicate(),
@@ -594,12 +573,12 @@ def fit_multi_device(
 
         validation_dataset = shard_x_y(validation_dataset_factory())
         if prefetch_buffer_size != 0:
-            validation_dataset = jax_utils.prefetch_to_device(validation_dataset, prefetch_buffer_size)
+            validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
 
-        validation_metrics = jax_utils.replicate(metrics_container_type.empty())
+        validation_metrics = replicate(metrics_container_type.empty())
 
         for x_batch, y_batch in validation_dataset:
-            with hooks.catch_error(un_replicate_state_fn(training_state), x_batch, y_batch, "validation"):
+            with hooks.catch_error(unreplicate(training_state), x_batch, y_batch, "validation"):
                 validation_step_metrics_i = validation_step_func(training_state, x_batch, y_batch)
             validation_metrics = validation_metrics.merge(validation_step_metrics_i)
 
@@ -608,11 +587,11 @@ def fit_multi_device(
 
         validation_metrics, training_state = hooks.call_on_epoch_end(
             epoch,
-            training_state=un_replicate_state_fn(training_state),
+            training_state=unreplicate(training_state),
             validation_metrics=validation_metrics.unreplicate(),
         )
 
-    training_state = un_replicate_state_fn(training_state)
+    training_state = unreplicate(training_state)
     hooks.call_on_training_end(training_state)
     training_metrics = training_metrics.unreplicate().compute()
     validation_metrics = validation_metrics.unreplicate().compute()
@@ -620,11 +599,19 @@ def fit_multi_device(
     return (training_metrics, validation_metrics), training_state.params
 
 
-def default_replicate_state(state: TS) -> TS:
-    state = jax_utils.replicate(state)
+# ---------------------- distributed utils ------------------------
+def shard_x_y(ds: Iterable[Tuple]):
+    for x, y in ds:
+        x = common_utils.shard(x)
+        y = common_utils.shard(y)
+        yield x, y
+
+
+def replicate_state(state: TS) -> TS:
+    replicated_state = replicate(state)
     if state.dropout_key is not None:
-        state = state.replace(dropout_key=common_utils.shard_prng_key(jax_utils.unreplicate(state.dropout_key)))
-    return state
+        replicated_state = replicated_state.replace(dropout_key=common_utils.shard_prng_key(state.dropout_key))
+    return replicated_state
 
 
 def should_stop_early(state: TS) -> bool:
