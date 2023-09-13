@@ -339,11 +339,11 @@ def fit(
     metrics_container_type : Type[M]
         The type of container to store the metrics.
     training_step_func : Callable[[TS, T, Int[Array, "batch classes"]], Tuple[TS, M]]
-        A function that performs a single training step. It takes the training training_state, input data, and target data as inputs,
-        and returns the updated training training_state and metrics.
+        A function that performs a single training step. It takes the training training_state,
+        input data, and target data as inputs, and returns the updated training training_state and metrics.
     validation_step_func : Callable[[TS, T, Int[Array, "batch classes"]], M]
-        A function that performs a single validation step. It takes the training training_state, input data, and target data as inputs,
-        and returns the metrics.
+        A function that performs a single validation step. It takes the training training_state, input data,
+        and target data as inputs, and returns the metrics.
     hooks : List[TrainingHook[TS, M]] | None, optional
         A list of training hooks to be executed before and after each training step. Defaults to None.
     epochs : int, optional

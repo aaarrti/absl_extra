@@ -95,7 +95,8 @@ def make_gpu_strategy(
     Parameters
     ----------
     strategy_cls:
-        Optional class of the strategy to use. Can be used to choose between e.g., MirroredStrategy and CentralStorage strategies.
+        Optional class of the strategy to use. Can be used to choose between e.g.,
+        MirroredStrategy and CentralStorage strategies.
     force:
 
     kwargs:
