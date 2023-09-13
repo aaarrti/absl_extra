@@ -8,34 +8,27 @@ from absl import flags, logging
 
 if util.find_spec("ml_collections"):
     from ml_collections import ConfigDict
-else:
-    ConfigDict = None
-if util.find_spec("pymongo"):
-    from pymongo.collection import Collection
-else:
-    Collection = None
 
 if TYPE_CHECKING:
     from absl_extra.notifier import BaseNotifier
 
-
-class CallbackFn(Protocol):
-    def __call__(
-        self,
-        name: str,
-        *,
-        notifier: BaseNotifier,
-        config: ConfigDict = None,
-        db: Collection = None,
-    ) -> None:
-        ...
+    class CallbackFn(Protocol):
+        def __call__(
+            self,
+            name: str,
+            *,
+            notifier: BaseNotifier,
+            config: ConfigDict = None,
+        ) -> None:
+            ...
 
 
 def log_absl_flags_callback(*args, **kwargs):
     logging.info("-" * 50)
     flags_dict = flags.FLAGS.flag_values_dict()
-    if "config" in flags_dict:
-        flags_dict["config"] = flags_dict["config"].to_dict()
+    for k, v in flags_dict.items():
+        if "config" in k:
+            flags_dict["config"] = flags_dict["config"].to_dict()
     logging.info(f"ABSL flags: {json.dumps(flags_dict, sort_keys=True, indent=4)}")
 
 
@@ -63,15 +56,7 @@ def log_shutdown_callback(name: str, *, notifier: BaseNotifier, **kwargs):
     notifier.notify_task_finished(name)
 
 
-def setup_logging(*args, **kwargs):
-    log_level = flags.FLAGS.log_level
-    from absl_extra.logging_utils import setup_logging
-
-    setup_logging(log_level=log_level)  # noqa
-
-
 DEFAULT_INIT_CALLBACKS = [
-    setup_logging,
     log_absl_flags_callback,
     log_startup_callback,
 ]

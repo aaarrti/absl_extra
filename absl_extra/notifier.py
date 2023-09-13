@@ -41,6 +41,7 @@ class LoggingNotifier(BaseNotifier):
         logging.info(f"Task {name} finished.")
 
     def notify_task_failed(self, name: str, exception: Exception):
+        # TODO: walk the stacktrace and log arguments of failed call.
         logging.info("-" * 50)
         logging.error(f"Task {name} failed with {exception}")
 
@@ -94,7 +95,7 @@ if util.find_spec("slack_sdk"):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f":x: Task {name} failed, reason:\n ```{exception}```",
+                            "text": f":x: Task {name} failed, reason:\n ```{repr(exception)}```",
                         },
                     }
                 ],

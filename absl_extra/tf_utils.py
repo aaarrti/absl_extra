@@ -3,11 +3,11 @@ from __future__ import annotations
 import functools
 import logging
 import platform
-from contextlib import contextmanager
-from typing import Callable, ContextManager, Protocol, Type, TypeVar
+from typing import Callable, Type, TypeVar
 
-import toolz
 import tensorflow as tf
+import toolz
+
 from absl_extra.typing_utils import ParamSpec
 
 T = TypeVar("T")
@@ -39,9 +39,7 @@ def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         if linux_only and platform.system().lower() != "linux":
-            logging.info(
-                "Not running on linux, and linux_only==True, ignoring GPU strategy check."
-            )
+            logging.info("Not running on linux, and linux_only==True, ignoring GPU strategy check.")
             return func(*args, **kwargs)
 
         gpus = tf.config.list_physical_devices("GPU")
@@ -53,21 +51,9 @@ def requires_gpu(func: Callable[P, T], linux_only: bool = False) -> Callable[P, 
     return wrapper
 
 
-class StrategyLike(Protocol):
-    def scope(self) -> ContextManager:
-        ...
-
-
-class NoOpStrategy:
-    def __init__(self, **kwargs):
-        pass
-
-    @contextmanager
-    def scope(self):
-        yield
-
-
-def make_tpu_strategy() -> StrategyLike:
+def make_tpu_strategy(
+    tpu: str | None = None, experimental_spmd_xla_partitioning: bool = True
+) -> tf.distribute.Strategy:
     """
     Used for testing locally scripts, which them must run on Colab TPUs. Allows to keep the same scripts,
     without changing strategy assignment.
@@ -91,25 +77,26 @@ def make_tpu_strategy() -> StrategyLike:
     """
     if platform.system().lower() != "linux":
         logging.warning("Not running on linux, falling back to NoOpStrategy.")
-        return NoOpStrategy()
+        return tf.distribute.get_strategy()
 
-    tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu)
     tf.config.experimental_connect_to_cluster(tpu)
     tf.tpu.experimental.initialize_tpu_system(tpu)
-    strategy = tf.distribute.TPUStrategy(tpu, experimental_spmd_xla_partitioning=True)
+    strategy = tf.distribute.TPUStrategy(tpu, experimental_spmd_xla_partitioning=experimental_spmd_xla_partitioning)
     return strategy
 
 
 def make_gpu_strategy(
-    strategy_cls: Type[StrategyLike] | None = None, force: bool = False, **kwargs
-) -> StrategyLike:
+    strategy_cls: Type[tf.distribute.Strategy] | None = None, force: bool = False, **kwargs
+) -> tf.distribute.Strategy:
     """
     Useful for testing locally scripts, which must run on multiple GPUs, without changing scripts structure.
 
     Parameters
     ----------
     strategy_cls:
-        Optional class of the strategy to use. Can be used to choose between e.g., MirroredStrategy and CentralStorage strategies.
+        Optional class of the strategy to use. Can be used to choose between e.g.,
+        MirroredStrategy and CentralStorage strategies.
     force:
 
     kwargs:
@@ -133,12 +120,12 @@ def make_gpu_strategy(
     n_gpus = len(gpus)
     if n_gpus == 0:
         logging.warning("No GPUs found, falling back to NoOpStrategy.")
-        return NoOpStrategy()
+        return tf.distribute.get_strategy()
     if n_gpus == 1:
         if force:
             return tf.distribute.OneDeviceStrategy(gpus[0])
         else:
-            return NoOpStrategy()
+            return tf.distribute.get_strategy()
 
     if strategy_cls is None:
         strategy_cls = tf.distribute.MirroredStrategy
@@ -151,6 +138,7 @@ def supports_mixed_precision() -> bool:
     tpus = tf.config.list_logical_devices("TPU")
     if len(tpus) != 0:
         logging.info("Mixed precision OK. You should use mixed_bfloat16 for TPU.")
+        return True
     gpus = tf.config.list_physical_devices("GPU")
     if len(gpus) == 0:
         return False

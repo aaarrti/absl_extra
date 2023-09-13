@@ -1,6 +1,6 @@
 [project]
 name = "absl_extra"
-version = "0.0.3dev9"
+version = "0.1.1"
 description = "A wrapper to run and monitor absl app."
 readme = "Readme.md"
 requires-python = ">=3.8"
@@ -23,7 +23,9 @@ dev = [
     "black",
     "pytest",
     "chex",
-    "absl_extra[mongo,ml_collections,slack,tensorflow,jax,flax]"
+    "absl_extra[mongo,ml_collections,slack,tensorflow,jax,flax]",
+    "ruff",
+    "mypy==1.4.1"
 ]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]
@@ -40,7 +42,8 @@ jax = [
 flax = [
     "absl_extra[jax]",
     "flax",
-    "clu"
+    "clu",
+    "tqdm"
 ]
 
 
@@ -51,3 +54,13 @@ flax = [
 [build-system]
 requires = ["flit-core >= 3.4"]
 build-backend = "flit_core.buildapi"
+
+[tool.black]
+line-length = 120
+
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 120

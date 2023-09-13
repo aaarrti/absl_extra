@@ -3,7 +3,7 @@ import jax
 import chex
 import pytest
 
-from absl_extra.flax_utils import BinaryAccuracy
+from absl_extra.clu_utils import BinaryAccuracy
 
 
 PRNG_SEED = 69
@@ -12,9 +12,7 @@ NUM_CLASSES = 5
 
 
 def_y_true = jnp.ones([BATCH_SIZE, NUM_CLASSES], jnp.int32)
-def_y_pred = jax.random.uniform(
-    jax.random.PRNGKey(PRNG_SEED), [BATCH_SIZE, NUM_CLASSES], jnp.float32
-)
+def_y_pred = jax.random.uniform(jax.random.PRNGKey(PRNG_SEED), [BATCH_SIZE, NUM_CLASSES], jnp.float32)
 
 
 @pytest.mark.parametrize(

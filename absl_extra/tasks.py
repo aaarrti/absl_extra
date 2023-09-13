@@ -1,49 +1,19 @@
 from __future__ import annotations
 
 import functools
-from importlib import util
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Mapping,
-    Protocol,
-    TypeVar,
-)
+from typing import TYPE_CHECKING, Callable, Dict, List
 
-from absl import app, flags, logging
+import toolz
+from absl import app, flags
 
 from absl_extra.notifier import BaseNotifier, LoggingNotifier
-from absl_extra.dataclass import dataclass
+from absl_extra.typing_utils import ParamSpec
 
-T = TypeVar("T", bound=Callable)
+P = ParamSpec("P")
 FLAGS = flags.FLAGS
-flags.DEFINE_string("task", default="main", help="Name of the function to execute.")
-flags.DEFINE_enum(
-    "log_level",
-    enum_values=["INFO", "DEBUG", "ERROR", "WARNING"],
-    default="INFO",
-    help="Logging level to use. If None, no auto-setup will be executed.",
-)
-
-if util.find_spec("pymongo"):
-    from pymongo import MongoClient
-    from pymongo.collection import Collection
-else:
-    Collection = type(None)
-    logging.warning("pymongo not installed.")
 
 if TYPE_CHECKING:
     from absl_extra.callbacks import CallbackFn
-
-
-@dataclass
-class MongoConfig:
-    uri: str
-    db_name: str
-    collection: str
 
 
 class _ExceptionHandlerImpl(app.ExceptionHandler):
@@ -55,40 +25,23 @@ class _ExceptionHandlerImpl(app.ExceptionHandler):
         self.notifier.notify_task_failed(self.name, exception)
 
 
-class _TaskFn(Protocol):
-    def __call__(self, *, db: Collection = None, **kwargs) -> None:
-        ...
-
-
 _TASK_STORE: Dict[str, Callable[[...], None]] = dict()  # type: ignore
 
 
-class NonExistentTaskError(RuntimeError):
-    def __init__(self, task: str):
-        super().__init__(
-            f"Unknown task {task}, registered are {list(_TASK_STORE.keys())}"
-        )
-
-
-def _make_task_func(
-    func: _TaskFn,
+@toolz.curry
+def make_task_func(
+    func: Callable[P, None],
     *,
     name: str,
-    notifier: BaseNotifier | Callable[[], BaseNotifier],
+    notifier: BaseNotifier,
     init_callbacks: List[CallbackFn],
     post_callbacks: List[CallbackFn],
-    db_factory=None,
-) -> _TaskFn:
+) -> Callable[P, None]:
     _name = name
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs):
         app.install_exception_handler(_ExceptionHandlerImpl(name, notifier))  # type: ignore
-        kwargs = {}
-        if db_factory is not None:
-            db = db_factory()
-            kwargs["db"] = db
-
         for hook in init_callbacks:
             hook(_name, notifier=notifier, **kwargs)
 
@@ -100,23 +53,25 @@ def _make_task_func(
     return wrapper
 
 
+@toolz.curry
 def register_task(
+    func: Callable[P, None],
     *,
     name: str = "main",
     notifier: BaseNotifier | Callable[[], BaseNotifier] | None = None,
-    mongo_config: MongoConfig | Mapping[str, Any] | None = None,
     init_callbacks: List[CallbackFn] | None = None,
     post_callbacks: List[CallbackFn] | None = None,
-) -> Callable[[_TaskFn], None]:
+) -> Callable[P, None]:  # type: ignore
     """
     Parameters
     ----------
+
+    func:
+        Function to execute.
     name : str, optional
         The name of the task. Default is "main".
     notifier : BaseNotifier | Callable[[], BaseNotifier] | None, optional
         The notifier object or callable that returns a notifier object. Default is None.
-    mongo_config : MongoConfig | Mapping[str, Any] | None, optional
-        The configuration object for MongoDB or a mapping of configuration values. Default is None.
     init_callbacks : List[CallbackFn] | None, optional
         The list of callback functions to be executed during task initialization. Default is None.
     post_callbacks : List[CallbackFn] | None, optional
@@ -127,6 +82,10 @@ def register_task(
     Callable[[_TaskFn], None]
         The decorator function that registers the task.
     """
+
+    if name is _TASK_STORE:
+        raise RuntimeError(f"Task with name {name} is already registered.")
+
     from absl_extra.callbacks import DEFAULT_INIT_CALLBACKS, DEFAULT_POST_CALLBACK
 
     if isinstance(notifier, Callable):  # type: ignore
@@ -134,43 +93,30 @@ def register_task(
     if notifier is None:
         notifier = LoggingNotifier()
 
-    kwargs = {}
-
-    if util.find_spec("pymongo") and mongo_config is not None:
-        if isinstance(mongo_config, Mapping):
-            mongo_config = MongoConfig(**mongo_config)
-        db_factory = lambda: (  # noqa
-            MongoClient(mongo_config.uri)
-            .get_database(mongo_config.db_name)
-            .get_collection(mongo_config.collection)
-        )
-        kwargs["db_factory"] = db_factory
-
     if init_callbacks is None:
         init_callbacks = DEFAULT_INIT_CALLBACKS  # type: ignore
 
     if post_callbacks is None:
         post_callbacks = DEFAULT_POST_CALLBACK  # type: ignore
 
-    def decorator(func: _TaskFn) -> None:
-        _TASK_STORE[name] = functools.partial(  # type: ignore
-            _make_task_func,
-            name=name,
-            notifier=notifier,
-            init_callbacks=init_callbacks,
-            post_callbacks=post_callbacks,
-            **kwargs,
-        )(func)
+    _TASK_STORE[name] = make_task_func(
+        name=name,
+        notifier=notifier,
+        init_callbacks=init_callbacks,
+        post_callbacks=post_callbacks,
+    )(func)
 
-    return decorator
+    return _TASK_STORE[name]  # type: ignore
 
 
-def run(argv: List[str] | None = None, **kwargs):
+def run(argv: List[str] | None = None, task_flag: str = "task", **kwargs):
     """
     Parameters
     ----------
     argv:
         CLI args passed to absl.app.run
+    task_flag:
+        Name of the CLI flag used to identify which task to run.
     kwargs:
         Kwargs passed to entrypoint function.
 
@@ -178,11 +124,12 @@ def run(argv: List[str] | None = None, **kwargs):
     -------
 
     """
+    flags.DEFINE_string(task_flag, default="main", help="Name of the function to execute.")
 
     def select_main(_):
-        task_name = FLAGS.task
+        task_name = getattr(FLAGS, task_flag)
         if task_name not in _TASK_STORE:
-            raise NonExistentTaskError(task_name)
+            raise RuntimeError(f"Unknown {task_flag} {task_name}, registered are {list(_TASK_STORE.keys())}")
         func = _TASK_STORE[task_name]
         func(**kwargs)
 
