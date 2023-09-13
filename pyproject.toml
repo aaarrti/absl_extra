@@ -23,7 +23,9 @@ dev = [
     "black",
     "pytest",
     "chex",
-    "absl_extra[mongo,ml_collections,slack,tensorflow,jax,flax]"
+    "absl_extra[mongo,ml_collections,slack,tensorflow,jax,flax]",
+    "ruff",
+    "mypy==1.4.1"
 ]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]

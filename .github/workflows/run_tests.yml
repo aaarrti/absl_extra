@@ -37,14 +37,14 @@ jobs:
       - name: Setup test environment
         run: tox run -e ${{ matrix.env }} --notest
 
-      - name: Test with Tox
+      - name: Test
         run: tox run -e ${{ matrix.env }}-test
 
-      - name: Setup lint environment
-        run: python -m tox run -e ${{ matrix.env }}-lint --notest
-
       - name: Lint
-        run: python -m tox run -e ${{ matrix.env }}-lint
+        uses: chartboost/ruff-action@v1
+
+      - name: Type check
+        uses: tox run -e ${{ matrix.env }}-type
 
       - name: Verify black code-style
         uses: psf/black@stable
