@@ -62,13 +62,13 @@ class F1Score(clu.metrics.Metric):
             false_negative=jnp.asarray(0),
         )
 
-    def compute(self) -> float | jnp.ndarray:
+    def compute(self) -> Float[Array, "1"]:
         precision = self.true_positive / (self.true_positive + self.false_positive)
         recall = self.true_positive / (self.true_positive + self.false_negative)
 
         # Ensure we don't divide by zero if both precision and recall are zero
         if precision + recall == 0:
-            return 0.0
+            return jnp.asarray(0.0, self.true_positive.dtype)
 
         f1_score = 2 * (precision * recall) / (precision + recall)
         return f1_score
