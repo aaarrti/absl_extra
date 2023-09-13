@@ -45,3 +45,9 @@ jobs:
 
       - name: Lint
         run: python -m tox run -e ${{ matrix.env }}-lint
+
+      - name: Verify black code-style
+        uses: psf/black@stable
+        with:
+          options: "--check --diff --color"
+          jupyter: true
