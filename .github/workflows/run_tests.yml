@@ -31,3 +31,6 @@ jobs:
 
       - name: Test with Tox
         run: tox run
+
+      - name: Lint
+        run: python -m tox run -e lint
