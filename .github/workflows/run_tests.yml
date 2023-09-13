@@ -4,6 +4,8 @@ on:
   pull_request:
   workflow_dispatch:
   push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -12,26 +14,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ "3.8", "3.9", "3.10" ]
-        env: [ "py38", "py39", "py310" ]
+        include:
+          - python: "3.8"
+            env: "py38"
+          - python: "3.9"
+            env: "py39"
+          - python: "3.10"
+            env: "py310"
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Setup python ${{ matrix.python-version }}
+      - name: Setup python ${{ matrix.python }}
         uses: actions/setup-python@v4
         with:
           cache: 'pip'
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python }}
 
       - name: Install tox
         run: pip install tox
 
       - name: Setup test environment
-        run: tox run -e ${{ matrix.python-version }} --notest
+        run: tox run -e ${{ matrix.env }} --notest
 
       - name: Test with Tox
-        run: tox run -e ${{ matrix.python-version }}
+        run: tox run -e ${{ matrix.env }}-test
+
+      - name: Setup lint environment
+        run: python -m tox run -e ${{ matrix.env }}-lint --notest
 
       - name: Lint
-        run: python -m tox run -e ${{ matrix.python-version }}-lint
+        run: python -m tox run -e ${{ matrix.env }}-lint
