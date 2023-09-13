@@ -40,7 +40,8 @@ jax = [
 flax = [
     "absl_extra[jax]",
     "flax",
-    "clu"
+    "clu",
+    "tqdm"
 ]
 
 
