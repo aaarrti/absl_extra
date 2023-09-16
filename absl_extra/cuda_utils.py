@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Literal, TYPE_CHECKING, overload, List, Protocol, no_type_check
 from importlib import util
 from threading import Lock
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 from absl import logging
+from toolz.dicttoolz import valmap
 
 
 if TYPE_CHECKING:
@@ -38,10 +39,13 @@ if TYPE_CHECKING:
         used: GBMemory
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class MemoryType:
     value: float | int
     unit: Literal["bytes", "MB", "GB"] = "bytes"
+
+    def __repr__(self) -> str:
+        return str(self.value) if self.unit == "bytes" else f"{self.value} {self.unit}"
 
     @overload
     def cast(self, unit: Literal["GB"]) -> GBMemory:
@@ -88,6 +92,9 @@ class MemoryInfo:
     total: MemoryType
     free: MemoryType
     used: MemoryType
+
+    def __repr__(self) -> str:
+        return repr(valmap(repr, asdict(self)))
 
     @overload
     def cast(self, unit: Literal["bytes"]) -> BytesMemoryInfo:
