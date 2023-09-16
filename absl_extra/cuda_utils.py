@@ -1,115 +1,23 @@
 from __future__ import annotations
 
-from typing import Literal, TYPE_CHECKING, overload, List, Protocol, no_type_check
-from importlib import util
 from dataclasses import dataclass, asdict
+from importlib import util
+from typing import List
 
 from absl import logging
 from toolz.dicttoolz import valmap
 
 
-if TYPE_CHECKING:
-
-    class BytesMemory(Protocol):
-        value: int
-        unit: Literal["bytes"]
-
-    class MBMemory(Protocol):
-        value: int | float
-        unit: Literal["MB"]
-
-    class GBMemory(Protocol):
-        value: int | float
-        unit: Literal["MB"]
-
-    class BytesMemoryInfo(Protocol):
-        total: BytesMemory
-        free: BytesMemory
-        used: BytesMemory
-
-    class MBMemoryInfo(Protocol):
-        total: MBMemory
-        free: MBMemory
-        used: MBMemory
-
-    class GBMemoryInfo(Protocol):
-        total: GBMemory
-        free: GBMemory
-        used: GBMemory
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class MemoryType:
-    value: float | int
-    unit: Literal["bytes", "MB", "GB"] = "bytes"
-
-    def __repr__(self) -> str:
-        return str(self.value) if self.unit == "bytes" else f"{self.value} {self.unit}"
-
-    @overload
-    def cast(self, unit: Literal["GB"]) -> GBMemory:
-        ...
-
-    @overload
-    def cast(self, unit: Literal["MB"]) -> MBMemory:
-        ...
-
-    @overload
-    def cast(self, unit: Literal["bytes"]) -> BytesMemory:
-        ...
-
-    @no_type_check
-    def cast(self, unit: Literal["bytes", "MB", "GB"]) -> MemoryType:
-        if unit == self.unit:
-            return self
-
-        value = self.value
-        # There is probably a normal way of implementing it, but I was to lazy so I just hardcoded it.
-        if self.unit == "bytes":
-            if unit == "MB":
-                value /= 1024
-            if unit == "GB":
-                value /= 1024**2
-
-        if self.unit == "MB":
-            if unit == "bytes":
-                value *= 1024
-            if unit == "GB":
-                value /= 1024
-
-        if self.unit == "GB":
-            if unit == "MB":
-                value *= 1024
-            if unit == "bytes":
-                value *= 1024**2
-
-        return MemoryType(value=value, unit=unit)
-
-
 @dataclass(frozen=True, slots=True)
 class MemoryInfo:
-    total: MemoryType
-    free: MemoryType
-    used: MemoryType
+    """All values are in GB."""
+
+    total: float
+    free: float
+    used: float
 
     def __repr__(self) -> str:
-        return repr(valmap(repr, asdict(self)))
-
-    @overload
-    def cast(self, unit: Literal["bytes"]) -> BytesMemoryInfo:
-        ...
-
-    @overload
-    def cast(self, unit: Literal["MB"]) -> MBMemoryInfo:
-        ...
-
-    @overload
-    def cast(self, unit: Literal["GB"]) -> GBMemoryInfo:
-        ...
-
-    @no_type_check
-    def cast(self, unit: Literal["bytes", "MB", "GB"]) -> MemoryInfo:
-        return MemoryInfo(total=self.total.cast(unit), free=self.free.cast(unit), used=self.used.cast(unit))
+        return repr(valmap(lambda v: f"{v} GB", asdict(self)))
 
 
 if util.find_spec("pynvml") is not None:
@@ -182,21 +90,18 @@ if util.find_spec("pynvml") is not None:
 
         return bool(mixed_f16_ok)
 
-    def get_memory_info(unit: Literal["bytes", "MB", "GB"] = "GB") -> List[MemoryInfo]:
+    def get_memory_info() -> List[MemoryInfo]:
         """
         Get memory info for CUDA devices
 
         Parameters
         ----------
 
-        unit:
-            Memory unit "bytes", "MB", "GB".
-
         Returns
         -------
 
         memory_info:
-            List of total, free, used memory for each CUDA device in `unit`.
+            List of total, free, used memory for each CUDA device in GB`.
             Empty list is there are no CUDA devices.
 
         """
@@ -213,13 +118,13 @@ if util.find_spec("pynvml") is not None:
             handle = nvmlDeviceGetHandleByIndex(i)
             memory = nvmlDeviceGetMemoryInfo(handle)
             memory_info = MemoryInfo(
-                used=MemoryType(value=memory.used),
-                total=MemoryType(value=memory.total),
-                free=MemoryType(value=memory.free),
-            ).cast(unit)
+                used=bytes_to_gb(memory.used),
+                total=bytes_to_gb(memory.total),
+                free=bytes_to_gb(memory.free),
+            )
             memory_consumption_list.append(memory_info)
 
-        return memory_consumption_list  # type: ignore
+        return memory_consumption_list
 
 else:
 
@@ -227,10 +132,14 @@ else:
         logging.error("nvidia-ml-py not installed")
         return False
 
-    def get_memory_info(unit: Literal["bytes", "MB", "GB"] = "GB") -> List[MemoryInfo]:
+    def get_memory_info() -> List[MemoryInfo]:
         logging.error("nvidia-ml-py not installed")
         return []
 
     def cuda_devices_available() -> bool:
         logging.error("nvidia-ml-py not installed")
         return False
+
+
+def bytes_to_gb(value: int) -> float:
+    return value / (1024**3)
