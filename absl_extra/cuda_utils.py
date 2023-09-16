@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal, TYPE_CHECKING, overload, List, Protocol, no_type_check
 from importlib import util
-from threading import Lock
 from dataclasses import dataclass, asdict
 
 from absl import logging
@@ -127,18 +126,15 @@ if util.find_spec("pynvml") is not None:
     class NvmlState:
         def __init__(self):
             self.initialized = False
-            self.lock = Lock()
 
         def maybe_init(self):
-            with self.lock:
-                if not self.initialized:
-                    nvmlInit()
-                    self.initialized = True
+            if not self.initialized:
+                nvmlInit()
+                self.initialized = True
 
         def __del__(self):
-            with self.lock:
-                if self.initialized:
-                    nvmlShutdown()
+            if self.initialized:
+                nvmlShutdown()
 
     nvm_state = NvmlState()
 
@@ -228,13 +224,13 @@ if util.find_spec("pynvml") is not None:
 else:
 
     def supports_mixed_precision() -> bool:
-        logging.error("pynvml not installed")
+        logging.error("nvidia-ml-py not installed")
         return False
 
     def get_memory_info(unit: Literal["bytes", "MB", "GB"] = "GB") -> List[MemoryInfo]:
-        logging.error("pynvml not installed")
+        logging.error("nvidia-ml-py not installed")
         return []
 
     def cuda_devices_available() -> bool:
-        logging.error("pynvml not installed")
+        logging.error("nvidia-ml-py not installed")
         return False
