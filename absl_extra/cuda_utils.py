@@ -135,6 +135,11 @@ if util.find_spec("pynvml") is not None:
 
     nvm_state = NvmlState()
 
+    def cuda_devices_available() -> bool:
+        nvm_state.maybe_init()
+        deviceCount = nvmlDeviceGetCount()
+        return deviceCount > 0
+
     def supports_mixed_precision() -> bool:
         """
         Checks if CUDA devices support mixed float16 precision.
@@ -144,6 +149,7 @@ if util.find_spec("pynvml") is not None:
 
         bool:
             True, if all devices have `Compute Capability` of 7.5 or higher.
+            False, if there are no CUDA devices.
 
         """
         nvm_state.maybe_init()
@@ -172,7 +178,24 @@ if util.find_spec("pynvml") is not None:
 
         return bool(mixed_f16_ok)
 
-    def get_memory_info() -> List[GBMemoryInfo]:
+    def get_memory_info(unit: Literal["bytes", "MB", "GB"] = "GB") -> List[MemoryInfo]:
+        """
+        Get memory info for CUDA devices
+
+        Parameters
+        ----------
+
+        unit:
+            Memory unit "bytes", "MB", "GB".
+
+        Returns
+        -------
+
+        memory_info:
+            List of total, free, used memory for each CUDA device in `unit`.
+            Empty list is there are no CUDA devices.
+
+        """
         nvm_state.maybe_init()
         deviceCount = nvmlDeviceGetCount()
 
@@ -189,7 +212,21 @@ if util.find_spec("pynvml") is not None:
                 used=MemoryType(value=memory.used),
                 total=MemoryType(value=memory.total),
                 free=MemoryType(value=memory.free),
-            ).cast("GB")
+            ).cast(unit)
             memory_consumption_list.append(memory_info)
 
-        return memory_consumption_list
+        return memory_consumption_list  # type: ignore
+
+else:
+
+    def supports_mixed_precision() -> bool:
+        logging.error("pynvml not installed")
+        return False
+
+    def get_memory_info(unit: Literal["bytes", "MB", "GB"] = "GB") -> List[MemoryInfo]:
+        logging.error("pynvml not installed")
+        return []
+
+    def cuda_devices_available() -> bool:
+        logging.error("pynvml not installed")
+        return False
