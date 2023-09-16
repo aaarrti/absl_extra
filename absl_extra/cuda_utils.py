@@ -172,6 +172,7 @@ if util.find_spec("pynvml") is not None:
             handle = nvmlDeviceGetHandleByIndex(i)
             cc = nvmlDeviceGetCudaComputeCapability(handle)
             name = nvmlDeviceGetName(handle)
+            cc = float(f"{cc[0]}.{cc[1]}")
 
             if cc >= 7.5:
                 logging.info(f"{name} has CC {cc} (>= 7.5) -> mixed float16 OK.")
