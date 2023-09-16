@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+from typing import Literal, TYPE_CHECKING, overload, List, Protocol, no_type_check
+from importlib import util
+from threading import Lock
+from dataclasses import dataclass
+
+from absl import logging
+
+
+if TYPE_CHECKING:
+
+    class BytesMemory(Protocol):
+        value: int
+        unit: Literal["bytes"]
+
+    class MBMemory(Protocol):
+        value: int | float
+        unit: Literal["MB"]
+
+    class GBMemory(Protocol):
+        value: int | float
+        unit: Literal["MB"]
+
+    class BytesMemoryInfo(Protocol):
+        total: BytesMemory
+        free: BytesMemory
+        used: BytesMemory
+
+    class MBMemoryInfo(Protocol):
+        total: MBMemory
+        free: MBMemory
+        used: MBMemory
+
+    class GBMemoryInfo(Protocol):
+        total: GBMemory
+        free: GBMemory
+        used: GBMemory
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryType:
+    value: float | int
+    unit: Literal["bytes", "MB", "GB"] = "bytes"
+
+    @overload
+    def cast(self, unit: Literal["GB"]) -> GBMemory:
+        ...
+
+    @overload
+    def cast(self, unit: Literal["MB"]) -> MBMemory:
+        ...
+
+    @overload
+    def cast(self, unit: Literal["bytes"]) -> BytesMemory:
+        ...
+
+    @no_type_check
+    def cast(self, unit: Literal["bytes", "MB", "GB"]) -> MemoryType:
+        if unit == self.unit:
+            return self
+
+        value = self.value
+        # There is probably a normal way of implementing it, but I was to lazy so I just hardcoded it.
+        if self.unit == "bytes":
+            if unit == "MB":
+                value /= 1024
+            if unit == "GB":
+                value /= 1024**2
+
+        if self.unit == "MB":
+            if unit == "bytes":
+                value *= 1024
+            if unit == "GB":
+                value /= 1024
+
+        if self.unit == "GB":
+            if unit == "MB":
+                value *= 1024
+            if unit == "bytes":
+                value *= 1024**2
+
+        return MemoryType(value=value, unit=unit)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryInfo:
+    total: MemoryType
+    free: MemoryType
+    used: MemoryType
+
+    @overload
+    def cast(self, unit: Literal["bytes"]) -> BytesMemoryInfo:
+        ...
+
+    @overload
+    def cast(self, unit: Literal["MB"]) -> MBMemoryInfo:
+        ...
+
+    @overload
+    def cast(self, unit: Literal["GB"]) -> GBMemoryInfo:
+        ...
+
+    @no_type_check
+    def cast(self, unit: Literal["bytes", "MB", "GB"]) -> MemoryInfo:
+        return MemoryInfo(total=self.total.cast(unit), free=self.free.cast(unit), used=self.used.cast(unit))
+
+
+if util.find_spec("pynvml") is not None:
+    from pynvml import (
+        nvmlInit,
+        nvmlShutdown,
+        nvmlDeviceGetCount,
+        nvmlDeviceGetName,
+        nvmlDeviceGetMemoryInfo,
+        nvmlDeviceGetCudaComputeCapability,
+        nvmlDeviceGetHandleByIndex,
+    )
+
+    class NvmlState:
+        def __init__(self):
+            self.initialized = False
+            self.lock = Lock()
+
+        def maybe_init(self):
+            with self.lock:
+                if not self.initialized:
+                    nvmlInit()
+                    self.initialized = True
+
+        def __del__(self):
+            with self.lock:
+                if self.initialized:
+                    nvmlShutdown()
+
+    nvm_state = NvmlState()
+
+    def supports_mixed_precision() -> bool:
+        """
+        Checks if CUDA devices support mixed float16 precision.
+
+        Returns
+        -------
+
+        bool:
+            True, if all devices have `Compute Capability` of 7.5 or higher.
+
+        """
+        nvm_state.maybe_init()
+        deviceCount = nvmlDeviceGetCount()
+
+        if deviceCount == 0:
+            logging.warning("No CUDA devices found, mixed f16 -> NOT OK.")
+            return False
+
+        mixed_f16_ok = None
+
+        for i in range(deviceCount):
+            handle = nvmlDeviceGetHandleByIndex(i)
+            cc = nvmlDeviceGetCudaComputeCapability(handle)
+            name = nvmlDeviceGetName(handle)
+
+            if cc >= 7.5:
+                logging.info(f"{name} has CC {cc} (>= 7.5) -> mixed float16 OK.")
+                if mixed_f16_ok is None:
+                    mixed_f16_ok = True
+                else:
+                    mixed_f16_ok = mixed_f16_ok and True
+            else:
+                logging.info(f"{name} has CC {cc} (< 7.5) -> mixed float16 NOT OK.")
+                mixed_f16_ok = False
+
+        return bool(mixed_f16_ok)
+
+    def get_memory_info() -> List[GBMemoryInfo]:
+        nvm_state.maybe_init()
+        deviceCount = nvmlDeviceGetCount()
+
+        memory_consumption_list = []
+
+        if deviceCount == 0:
+            logging.error("No CUDA devices found.")
+            return []
+
+        for i in range(deviceCount):
+            handle = nvmlDeviceGetHandleByIndex(i)
+            memory = nvmlDeviceGetMemoryInfo(handle)
+            memory_info = MemoryInfo(
+                used=MemoryType(value=memory.used),
+                total=MemoryType(value=memory.total),
+                free=MemoryType(value=memory.free),
+            ).cast("GB")
+            memory_consumption_list.append(memory_info)
+
+        return memory_consumption_list

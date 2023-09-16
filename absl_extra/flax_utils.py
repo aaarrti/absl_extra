@@ -23,7 +23,6 @@ from typing import (
 import jax.numpy as jnp
 import jax.random
 from absl import logging
-from clu.metrics import Collection
 from flax.core.frozen_dict import FrozenDict
 from flax.jax_utils import prefetch_to_device, replicate, unreplicate
 from flax.serialization import from_bytes, msgpack_restore, to_bytes
@@ -36,6 +35,8 @@ from absl_extra.logging_utils import log_exception
 from absl_extra.typing_utils import ParamSpec
 
 if TYPE_CHECKING:
+    from clu.metrics import Collection
+
     # This one should not be directly subclassed
     class TrainStateContainer(train_state.TrainState):
         dropout_key: jax.random.KeyArray | None

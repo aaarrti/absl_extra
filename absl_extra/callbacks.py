@@ -33,7 +33,7 @@ def log_absl_flags_callback(*args, **kwargs):
             return v.to_dict()
         else:
             return v
-    
+
     logging.info("-" * 50)
     flags_dict = dicttoolz.valmap(
         map_fn,

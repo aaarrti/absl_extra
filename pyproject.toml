@@ -1,6 +1,6 @@
 [project]
 name = "absl_extra"
-version = "0.1.2.dev1"
+version = "0.1.2.dev2"
 description = "A wrapper to run and monitor absl app."
 readme = "Readme.md"
 requires-python = ">=3.8"
@@ -44,6 +44,9 @@ flax = [
     "flax",
     "clu",
     "tqdm"
+]
+cuda = [
+    "pynvml"
 ]
 
 
