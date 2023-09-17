@@ -3,19 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from importlib import util
 from typing import List
-from functools import partial
 
 from absl import logging
 from toolz.dicttoolz import valmap
 import sys
 
 if sys.version_info >= (3, 10):
-    dataclass_fn = partial(dataclass, slots=True)
+    dc_kw = dict(slots=True)
 else:
-    dataclass_fn = dataclass
-    
-    
-@dataclass_fn(frozen=True)
+    dc_kw = dict()
+
+
+@dataclass(frozen=True, **dc_kw)
 class MemoryInfo:
     """All values are in GB."""
 

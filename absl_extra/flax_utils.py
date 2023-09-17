@@ -549,9 +549,9 @@ def _fit_multi_device(
                 training_state, training_step_metrics = training_step_func(training_state, x_batch, y_batch)
             training_metrics = training_metrics.merge(training_step_metrics)
 
-            un_replicated_state = unreplicate(training_state)
+            un_replicated_state: TS = unreplicate(training_state)
             training_metrics, training_state = hooks.call_on_step_end(
-                int(un_replicated_state),
+                int(un_replicated_state.step),
                 training_metrics=training_metrics.unreplicate(),
                 training_state=un_replicated_state,
             )
