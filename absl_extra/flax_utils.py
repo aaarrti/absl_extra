@@ -542,10 +542,11 @@ def _fit_multi_device(
                 # Fast-forward reloaded steps
                 current_step += 1
                 continue
+            
+            un_replicated_state: TS = unreplicate(training_state)
+            hooks.call_on_step_begin(int(un_replicated_state.step))
 
-            hooks.call_on_step_begin(int(unreplicate(training_state.step)))
-
-            with hooks.catch_error(unreplicate(training_state), x_batch, y_batch, "training"):
+            with hooks.catch_error(un_replicated_state, x_batch, y_batch, "training"):
                 training_state, training_step_metrics = training_step_func(training_state, x_batch, y_batch)
             training_metrics = training_metrics.merge(training_step_metrics)
 
@@ -590,7 +591,6 @@ def _fit_multi_device(
             validation_metrics=validation_metrics.unreplicate(),
         )
 
-    training_state = unreplicate(training_state)
     hooks.call_on_training_end(training_state)
     training_metrics = training_metrics.unreplicate().compute()
     validation_metrics = validation_metrics.unreplicate().compute()
