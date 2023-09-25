@@ -592,7 +592,7 @@ def fit_multi_device(
         if verbose:
             logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
 
-        training_state = param_replication.un_replicate(training_state)
+        training_state = param_replication.un_replicate(replicated_state)
         validation_metrics, training_state = hooks.call_on_epoch_end(
             epoch,
             training_state=training_state,
