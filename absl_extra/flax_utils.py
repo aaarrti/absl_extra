@@ -77,7 +77,7 @@ if TYPE_CHECKING:
             ...
 
 
-class ParamSharding(NamedTuple):
+class ParamReplication(NamedTuple):
     replicate: Callable[[TS], TS]
     un_replicate: Callable[[TS], TS]
 
@@ -327,6 +327,7 @@ def fit(
     prefetch_buffer_size: int = 2,
     verbose: bool = True,
     num_training_steps: int | None = None,
+    param_replication: ParamReplication | None = None,
 ) -> MetricsAndParams:
     """
     Parameters
@@ -355,6 +356,7 @@ def fit(
         Whether to display verbose output during training. Defaults to False.
     num_training_steps:
         Must be provided in cases verbose=True, and dataset is not typing.Sized.
+    param_replication:
 
     Returns
     -------
@@ -368,7 +370,7 @@ def fit(
         hooks = TrainingHooks()
 
     if jax.device_count() == 1:
-        return _fit_single_device(
+        return fit_single_device(
             training_state=training_state,
             metrics_container_type=metrics_container_type,
             training_step_func=training_step_func,
@@ -381,7 +383,7 @@ def fit(
             num_training_steps=num_training_steps,
         )
     else:
-        return _fit_multi_device(
+        return fit_multi_device(
             training_state=training_state,
             metrics_container_type=metrics_container_type,
             training_step_func=training_step_func,
@@ -393,10 +395,11 @@ def fit(
             prefetch_buffer_size=prefetch_buffer_size,
             verbose=verbose,
             num_training_steps=num_training_steps,
+            param_replication=param_replication,
         )
 
 
-def _fit_single_device(
+def fit_single_device(
     *,
     training_state: TS,
     metrics_container_type: Type[M],
@@ -487,7 +490,7 @@ def _fit_single_device(
     return (training_metrics, validation_metrics), params
 
 
-def _fit_multi_device(
+def fit_multi_device(
     *,
     training_state: TS,
     metrics_container_type: Type[M],
@@ -500,12 +503,16 @@ def _fit_multi_device(
     prefetch_buffer_size,
     verbose: bool = True,
     num_training_steps: int | None,
+    param_replication: ParamReplication | None = None,
 ) -> MetricsAndParams:
     if epochs <= 0:
         raise RuntimeError(f"Epochs must be greater than 0, but found {epochs}")
 
     if hooks is None:
         hooks = TrainingHooks()
+
+    if param_replication is None:
+        param_replication = make_default_param_sharding()
 
     # maybe restore training training_state
     current_step = None
@@ -514,8 +521,6 @@ def _fit_multi_device(
         logging.info("Loaded saved training training_state.")
         training_state = loaded_state  # type: ignore
         current_step = 0
-
-    training_state = replicate(training_state)
 
     should_stop = False
     training_metrics: M = replicate(metrics_container_type.empty())
@@ -535,28 +540,29 @@ def _fit_multi_device(
                 desc=f"Epoch {epoch + 1}/{epochs}...",
             )
 
-        training_metrics = replicate(metrics_container_type.empty())
+        training_metrics = metrics_container_type.empty()
 
         for x_batch, y_batch in training_dataset:
             if current_step is not None and current_step < int(current_step):
                 # Fast-forward reloaded steps
                 current_step += 1
                 continue
-            
-            un_replicated_state: TS = unreplicate(training_state)
-            hooks.call_on_step_begin(int(un_replicated_state.step))
 
-            with hooks.catch_error(un_replicated_state, x_batch, y_batch, "training"):
-                training_state, training_step_metrics = training_step_func(training_state, x_batch, y_batch)
-            training_metrics = training_metrics.merge(training_step_metrics)
+            hooks.call_on_step_begin(int(training_state.step))
 
-            un_replicated_state: TS = unreplicate(training_state)
+            replicated_state = param_replication.replicate(training_state)
+            with hooks.catch_error(training_state, x_batch, y_batch, "training"):
+                replicated_state, training_step_metrics = training_step_func(replicated_state, x_batch, y_batch)
+
+            training_metrics = training_metrics.merge(training_step_metrics.unreplicate())
+            training_state = param_replication.un_replicate(replicated_state)
+
             training_metrics, training_state = hooks.call_on_step_end(
-                int(un_replicated_state.step),
-                training_metrics=training_metrics.unreplicate(),
-                training_state=un_replicated_state,
+                int(training_state.step),
+                training_metrics=training_metrics,
+                training_state=training_state,
             )
-            should_stop = should_stop_early(un_replicated_state)
+            should_stop = should_stop_early(training_state)
             if should_stop:
                 logging.info("Stopping early")
                 break
@@ -566,7 +572,7 @@ def _fit_multi_device(
             continue
 
         if verbose:
-            logging.info({f"train_{k}": f"{float(v):.3f}"} for k, v in training_metrics.unreplicate().compute().items())
+            logging.info({f"train_{k}": f"{float(v):.3f}"} for k, v in training_metrics.compute().items())
 
         if should_stop:
             break
@@ -575,25 +581,27 @@ def _fit_multi_device(
         if prefetch_buffer_size != 0:
             validation_dataset = prefetch_to_device(validation_dataset, prefetch_buffer_size)
 
-        validation_metrics = replicate(metrics_container_type.empty())
+        validation_metrics = metrics_container_type.empty()
+        replicated_state = param_replication.replicate(training_state)
 
         for x_batch, y_batch in validation_dataset:
-            with hooks.catch_error(unreplicate(training_state), x_batch, y_batch, "validation"):
-                validation_step_metrics_i = validation_step_func(training_state, x_batch, y_batch)
-            validation_metrics = validation_metrics.merge(validation_step_metrics_i)
+            with hooks.catch_error(training_state, x_batch, y_batch, "validation"):
+                validation_step_metrics_i: M = validation_step_func(replicated_state, x_batch, y_batch)
+            validation_metrics = validation_metrics.merge(validation_step_metrics_i.unreplicate())
 
         if verbose:
-            logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.unreplicate().compute().items())
+            logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
 
+        training_state = param_replication.un_replicate(training_state)
         validation_metrics, training_state = hooks.call_on_epoch_end(
             epoch,
-            training_state=unreplicate(training_state),
-            validation_metrics=validation_metrics.unreplicate(),
+            training_state=training_state,
+            validation_metrics=validation_metrics,
         )
 
     hooks.call_on_training_end(training_state)
-    training_metrics = training_metrics.unreplicate().compute()
-    validation_metrics = validation_metrics.unreplicate().compute()
+    training_metrics = training_metrics.compute()
+    validation_metrics = validation_metrics.compute()
 
     return (training_metrics, validation_metrics), training_state.params
 
@@ -606,12 +614,15 @@ def shard_x_y(ds: Iterable[Tuple]):
         yield x, y
 
 
-def replicate_state(state: TS) -> TS:
-    replicated_state = replicate(state)
-    if state.dropout_key is not None:
-        replicated_state = replicated_state.replace(dropout_key=common_utils.shard_prng_key(state.dropout_key))
-    return replicated_state
-
-
 def should_stop_early(state: TS) -> bool:
     return state.early_stopping is not None and state.early_stopping.should_stop
+
+
+def make_default_param_sharding() -> ParamReplication:
+    def replicate_fn(ts: TS):
+        replicated_state = replicate(ts)
+        if hasattr(ts, "dropout_key") and ts.dropout_key is not None:
+            replicated_state = replicated_state.replace(dropout_key=common_utils.shard_prng_key(ts.dropout_key))
+        return replicated_state
+
+    return ParamReplication(replicate=replicate_fn, un_replicate=unreplicate)
