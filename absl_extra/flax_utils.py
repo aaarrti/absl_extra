@@ -21,6 +21,7 @@ from typing import (
 )
 
 import jax.numpy as jnp
+import zlib
 import jax.random
 from absl import logging
 from flax.core.frozen_dict import FrozenDict
@@ -236,7 +237,9 @@ def combine_hooks(*hooks: TrainingHooks) -> TrainingHooks:
 
 
 @log_exception(ignore_argnames="params")
-def save_as_msgpack(params: FrozenDict, save_path: str = "model.msgpack") -> None:
+def save_as_msgpack(
+    params: FrozenDict, save_path: str = "model.msgpack", compression: Literal["GZIP"] | None = None
+) -> None:
     """
     Parameters
     ----------
@@ -244,6 +247,8 @@ def save_as_msgpack(params: FrozenDict, save_path: str = "model.msgpack") -> Non
         The frozen dictionary object that contains the parameters to be saved.
     save_path : str, optional
         The file path where the msgpack file will be saved. Default is "model.msgpack".
+    compression:
+        If set to GZIP, will compress bytes using gzip before saving to file-system.
 
     Returns
     -------
@@ -252,6 +257,9 @@ def save_as_msgpack(params: FrozenDict, save_path: str = "model.msgpack") -> Non
     """
     logging.debug(f"Saving to {save_path}")
     msgpack_bytes: bytes = to_bytes(params)
+
+    if compression == "GZIP":
+        msgpack_bytes = zlib.compress(msgpack_bytes)
 
     try:
         import tensorflow as tf
@@ -265,17 +273,19 @@ def save_as_msgpack(params: FrozenDict, save_path: str = "model.msgpack") -> Non
 
 
 @overload
-def load_from_msgpack(params: None, save_path: str) -> Dict[str, Any]:
+def load_from_msgpack(params: None, save_path: str, compression: Literal["GZIP"] | None = None) -> Dict[str, Any]:
     ...
 
 
 @overload
-def load_from_msgpack(params: FrozenDict, save_path: str) -> FrozenDict:
+def load_from_msgpack(params: FrozenDict, save_path: str, compression: Literal["GZIP"] | None = None) -> FrozenDict:
     ...
 
 
 @log_exception(ignore_argnames="params")
-def load_from_msgpack(params: FrozenDict | None, save_path: str = "model.msgpack") -> FrozenDict | Dict[str, Any]:
+def load_from_msgpack(
+    params: FrozenDict | None, save_path: str = "model.msgpack", compression: Literal["GZIP"] | None = None
+) -> FrozenDict | Dict[str, Any]:
     """
     Load model parameters from a msgpack file.
 
@@ -286,6 +296,8 @@ def load_from_msgpack(params: FrozenDict | None, save_path: str = "model.msgpack
     save_path : str, optional
         The path to the msgpack file containing the serialized parameters.
         Default is "model.msgpack".
+    compression:
+        Set to GZIP if bytes were GZIP compressed before saving to msgpack.
 
     Returns
     -------
@@ -305,6 +317,9 @@ def load_from_msgpack(params: FrozenDict | None, save_path: str = "model.msgpack
         logging.error("Failed to import tensorflow.io, falling back to local file-system")
         with open(save_path, "rb") as file:
             bytes_data = file.read()
+
+    if compression == "GZIP":
+        bytes_data = zlib.decompress(bytes_data)
 
     if params is not None:
         params = from_bytes(params, bytes_data)
