@@ -18,6 +18,7 @@ from typing import (
     Type,
     TypeVar,
     overload,
+    no_type_check,
 )
 
 import jax.numpy as jnp
@@ -51,7 +52,7 @@ if TYPE_CHECKING:
     TS = TypeVar("TS", bound=TrainStateContainer)
 
     M = TypeVar("M", bound=Collection, contravariant=True)
-    ValidationStep = Callable[[TS, jnp.ndarray, jnp.ndarray], Tuple[TS, M]]
+    ValidationStep = Callable[[TS, jnp.ndarray, jnp.ndarray], M]
     TrainingStep = Callable[[TS, jnp.ndarray, jnp.ndarray], Tuple[TS, M]]
     MetricsAndParams = Tuple[Tuple[Dict[str, float], Dict[str, float]], FrozenDict]
     StepType = Literal["training", "validation"]
@@ -633,6 +634,7 @@ def should_stop_early(state: TS) -> bool:
     return state.early_stopping is not None and state.early_stopping.should_stop
 
 
+@no_type_check
 def make_default_param_sharding() -> ParamReplication:
     def replicate_fn(ts: TS):
         replicated_state = replicate(ts)
