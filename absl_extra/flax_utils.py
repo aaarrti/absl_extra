@@ -477,7 +477,7 @@ def fit_single_device(
             continue
 
         if verbose:
-            logging.info({f"train_{k}": f"{float(v):.3f}"} for k, v in training_metrics.compute().items())
+            logging.info(format_metrics(training_metrics, prefix="training"))
 
         if should_stop:
             break
@@ -491,7 +491,7 @@ def fit_single_device(
             validation_metrics = validation_metrics.merge(validation_step_metrics_i)
 
         if verbose:
-            logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
+            logging.info(format_metrics(validation_metrics, prefix="validation"))
 
         validation_metrics, training_state = hooks.call_on_epoch_end(
             epoch, training_state=training_state, validation_metrics=validation_metrics
@@ -588,7 +588,7 @@ def fit_multi_device(
             continue
 
         if verbose:
-            logging.info({f"train_{k}": f"{float(v):.3f}"} for k, v in training_metrics.compute().items())
+            logging.info(format_metrics(training_metrics, prefix="training"))
 
         if should_stop:
             break
@@ -606,7 +606,7 @@ def fit_multi_device(
             validation_metrics = validation_metrics.merge(validation_step_metrics_i.unreplicate())
 
         if verbose:
-            logging.info({f"val_{k}": f"{float(v):.3f}"} for k, v in validation_metrics.compute().items())
+            logging.info(format_metrics(validation_metrics, prefix="validation"))
 
         training_state = param_replication.un_replicate(replicated_state)
         validation_metrics, training_state = hooks.call_on_epoch_end(
@@ -620,6 +620,10 @@ def fit_multi_device(
     validation_metrics = validation_metrics.compute()
 
     return (training_metrics, validation_metrics), training_state.params
+
+
+def format_metrics(metrics: M, prefix: str) -> Dict[str, str]:
+    return {f"{prefix}_{k}": f"{float(v):.3f}" for k, v in metrics.compute().items()}
 
 
 # ---------------------- distributed utils ------------------------
