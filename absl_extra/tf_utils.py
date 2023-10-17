@@ -143,7 +143,7 @@ def supports_mixed_precision() -> bool:
     if len(gpus) == 0:
         return False
 
-    if platform.system().lower() == "darwin" and "arm" in platform.processor().lower():
+    if platform.system().lower() == "darwin":
         logging.info("Mixed precision OK. Metal support F16 and BF16, make sure the plugin version is v1.0.0+.")
         return True
 
