@@ -142,6 +142,11 @@ def supports_mixed_precision() -> bool:
     gpus = tf.config.list_physical_devices("GPU")
     if len(gpus) == 0:
         return False
+
+    if platform.system().lower() == "darwin" and "arm" in platform.processor().lower():
+        logging.info("Mixed precision OK. Metal support F16 and BF16, make sure the plugin version is v1.0.0+.")
+        return True
+
     gpu_details_list = [tf.config.experimental.get_device_details(g) for g in gpus]
     for details in gpu_details_list:
         cc = details.get("compute_capability")
