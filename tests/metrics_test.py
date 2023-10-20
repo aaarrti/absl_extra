@@ -1,10 +1,9 @@
-import jax.numpy as jnp
-import jax
 import chex
+import jax
+import jax.numpy as jnp
 import pytest
 
 from absl_extra.clu_utils import BinaryAccuracy
-
 
 PRNG_SEED = 69
 BATCH_SIZE = 8

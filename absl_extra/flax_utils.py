@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zlib
 from contextlib import contextmanager
 from typing import (
     TYPE_CHECKING,
@@ -17,12 +18,11 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
-    overload,
     no_type_check,
+    overload,
 )
 
 import jax.numpy as jnp
-import zlib
 import jax.random
 from absl import logging
 from flax.core.frozen_dict import FrozenDict

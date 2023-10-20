@@ -1,10 +1,11 @@
+from typing import no_type_check
+
 import clu.metrics
 import clu.periodic_actions
 import jax
 import jax.numpy as jnp
 import numpy as np
 from flax import struct
-from typing import no_type_check
 
 
 @struct.dataclass

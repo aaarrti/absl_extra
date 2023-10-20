@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+import sys
+from dataclasses import asdict, dataclass
 from importlib import util
 from typing import List
 
 from absl import logging
 from toolz.dicttoolz import valmap
-import sys
 
 if sys.version_info >= (3, 10):
     dc_kw = dict(slots=True)
@@ -28,13 +28,13 @@ class MemoryInfo:
 
 if util.find_spec("pynvml") is not None:
     from pynvml import (
-        nvmlInit,
-        nvmlShutdown,
         nvmlDeviceGetCount,
-        nvmlDeviceGetName,
-        nvmlDeviceGetMemoryInfo,
         nvmlDeviceGetCudaComputeCapability,
         nvmlDeviceGetHandleByIndex,
+        nvmlDeviceGetMemoryInfo,
+        nvmlDeviceGetName,
+        nvmlInit,
+        nvmlShutdown,
     )
 
     class NvmlState:
