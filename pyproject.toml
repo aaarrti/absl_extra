@@ -25,7 +25,8 @@ dev = [
     "chex",
     "absl_extra[mongo,ml_collections,slack,tensorflow,jax,flax]",
     "ruff",
-    "mypy==1.4.1"
+    "mypy==1.4.1",
+    "clu"
 ]
 mongo = ["pymongo"]
 ml_collections = ["ml_collections"]
