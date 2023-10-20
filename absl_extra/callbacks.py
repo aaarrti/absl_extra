@@ -5,9 +5,12 @@ from importlib import util
 from typing import TYPE_CHECKING, Protocol
 
 from absl import flags, logging
+from toolz import dicttoolz
 
 if util.find_spec("ml_collections"):
     from ml_collections import ConfigDict
+else:
+    ConfigDict = None
 
 if TYPE_CHECKING:
     from absl_extra.notifier import BaseNotifier
@@ -24,11 +27,18 @@ if TYPE_CHECKING:
 
 
 def log_absl_flags_callback(*args, **kwargs):
+    def map_fn(v):
+        # In case ml collections is installed, and config dict was parsed as ABSL flags.
+        if ConfigDict is not None and isinstance(v, ConfigDict):
+            return v.to_dict()
+        else:
+            return v
+
     logging.info("-" * 50)
-    flags_dict = flags.FLAGS.flag_values_dict()
-    for k, v in flags_dict.items():
-        if "config" in k:
-            flags_dict["config"] = flags_dict["config"].to_dict()
+    flags_dict = dicttoolz.valmap(
+        map_fn,
+        flags.FLAGS.flag_values_dict().copy(),
+    )
     logging.info(f"ABSL flags: {json.dumps(flags_dict, sort_keys=True, indent=4)}")
 
 

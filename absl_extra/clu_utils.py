@@ -1,12 +1,13 @@
+from typing import no_type_check
+
 import clu.metrics
 import clu.periodic_actions
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import struct
-from jaxtyping import Array, Float, Int32, jaxtyped
 
 
-@jaxtyped
 @struct.dataclass
 class F1Score(clu.metrics.Metric):
     """
@@ -22,19 +23,35 @@ class F1Score(clu.metrics.Metric):
 
     """
 
-    true_positive: Float[Array, "1"]
-    false_positive: Float[Array, "1"]
-    false_negative: Float[Array, "1"]
+    true_positive: np.float32
+    false_positive: np.float32
+    false_negative: np.float32
 
     @classmethod
+    @no_type_check
     def from_model_output(
         cls,
         *,
-        logits: Float[Array, "batch classes"],  # noqa
-        labels: Int32[Array, "batch classes"],  # noqa
+        logits: jnp.ndarray,
+        labels: jnp.ndarray,
         threshold: float = 0.5,
         **kwargs,
     ) -> "F1Score":
+        """
+
+        Parameters
+        ----------
+        logits:
+            2D float
+        labels:
+            2D int
+        threshold
+        kwargs
+
+        Returns
+        -------
+
+        """
         probs = jax.nn.sigmoid(logits)
         predicted = jnp.asarray(probs >= threshold, labels.dtype)
         true_positive = jnp.sum((predicted == 1) & (labels == 1))
@@ -55,6 +72,7 @@ class F1Score(clu.metrics.Metric):
         )
 
     @classmethod
+    @no_type_check
     def empty(cls) -> "F1Score":
         return F1Score(
             true_positive=jnp.asarray(0),
@@ -62,7 +80,8 @@ class F1Score(clu.metrics.Metric):
             false_negative=jnp.asarray(0),
         )
 
-    def compute(self) -> Float[Array, "1"]:
+    @no_type_check
+    def compute(self) -> np.float32:
         precision = self.true_positive / (self.true_positive + self.false_positive)
         recall = self.true_positive / (self.true_positive + self.false_negative)
 
@@ -74,17 +93,31 @@ class F1Score(clu.metrics.Metric):
         return f1_score
 
 
-@jaxtyped
 @struct.dataclass
 class BinaryAccuracy(clu.metrics.Average):
     @classmethod
     def from_model_output(  # noqa
         cls,
         *,
-        logits: Float[Array, "batch classes"],  # noqa
-        labels: Int32[Array, "batch classes"],  # noqa
+        logits: jnp.ndarray,
+        labels: jnp.ndarray,
         threshold: float = 0.5,
         **kwargs,
     ) -> "BinaryAccuracy":
+        """
+
+        Parameters
+        ----------
+        logits:
+            2D floats
+        labels:
+            2d int
+        threshold
+        kwargs
+
+        Returns
+        -------
+
+        """
         predicted = jnp.asarray(logits >= threshold, logits.dtype)
         return super().from_model_output(values=jnp.asarray(predicted == labels, predicted.dtype))

@@ -9,6 +9,10 @@ on:
       - absl_extra
       - pyproject.toml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
 
